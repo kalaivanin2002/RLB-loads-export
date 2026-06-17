@@ -182,13 +182,18 @@ function pageInject(dropOffName) {
     ) || options[0];
 
     if (match) {
-      match.click();
-      await wait(600);
-      // Click outside to confirm the selection and close the dropdown
-      document.body.click();
-      await wait(300);
+      // Fire full mouse sequence on the option so React's onMouseDown/onClick both fire
+      ["mouseenter", "mouseover", "mousedown", "mouseup", "click"].forEach((type) =>
+        match.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }))
+      );
+      await wait(800);
+      // Do NOT click body — that dismisses the selection before React commits it.
+      // Just blur the input to close the listbox cleanly.
       input.dispatchEvent(new Event("blur", { bubbles: true }));
-      await wait(400);
+      await wait(500);
+      // Confirm the value was committed
+      const committed = document.querySelector("#rlb-origin-city-filter-value")?.textContent?.trim();
+      console.log("[RLB] origin committed value:", committed);
     } else {
       console.warn("[RLB] no suggestion matched:", dropOffName);
     }
@@ -201,9 +206,21 @@ function pageInject(dropOffName) {
     document.body.click();
     await wait(600);
 
-    // The dropdown is always in DOM — find the REQUIRED checkbox directly
-    const checkbox = document.querySelector('#equipment-type-filter-dropdown [role="checkbox"][id="REQUIRED"]');
-    if (!checkbox) { console.error("[RLB] REQUIRED checkbox not found"); return; }
+    // Poll for the REQUIRED checkbox — the dropdown may not be in DOM yet if page is still hydrating
+    let checkbox = null;
+    for (let i = 0; i < 20; i++) {
+      checkbox = document.querySelector('[role="checkbox"][id="REQUIRED"]') ||
+                 document.getElementById("REQUIRED");
+      if (checkbox) break;
+      console.log(`[RLB] waiting for REQUIRED checkbox... attempt ${i + 1}`);
+      await wait(500);
+    }
+    if (!checkbox) {
+      // Last resort: dump all role="checkbox" elements to console so we can see what's there
+      const all = [...document.querySelectorAll('[role="checkbox"]')];
+      console.error("[RLB] REQUIRED checkbox not found. All checkboxes:", all.map(el => `id=${el.id} val=${el.getAttribute("value")}`));
+      return;
+    }
 
     // Focus + click the checkbox element itself
     checkbox.focus();
