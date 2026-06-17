@@ -9,12 +9,56 @@
   <div class="container">
     <h1 class="title">RLB</h1>
 
-    <div id="driverList" class="driver-list"></div>
+    <!-- ── RLB Location Sync ─────────────────────────────────────────────── -->
+    <section class="card">
+      <div class="card-head">
+        <span class="card-title">Location Sync</span>
+        <button id="toggleSettings" class="link-btn" type="button">Settings</button>
+      </div>
 
-    <button id="searchLoadsBtn" class="btn-primary">Search Loads</button>
+      <div id="settings" class="settings hidden">
+        <label class="field">
+          <span>OnTrack API URL</span>
+          <input id="ontrackUrl" type="text" placeholder="https://ontrack-api.agilecyber.com/api/v1/rlb-locations" />
+        </label>
+        <label class="field">
+          <span>Bearer token</span>
+          <input id="token" type="password" placeholder="flb_live_…" />
+        </label>
+        <label class="field">
+          <span>Relay base URL</span>
+          <input id="relayBase" type="text" placeholder="https://relay.amazon.co.uk" />
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>Prefix</span>
+            <input id="prefix" type="text" />
+          </label>
+          <label class="field">
+            <span>Letters</span>
+            <input id="letters" type="text" />
+          </label>
+          <label class="field">
+            <span>Delay (ms)</span>
+            <input id="delayMs" type="number" min="0" step="50" />
+          </label>
+        </div>
+        <button id="saveSettings" class="btn-secondary" type="button">Save settings</button>
+      </div>
 
-    <p id="status" class="status"></p>
+      <button id="syncBtn" class="btn-primary" type="button">Sync RLB Locations (a–z)</button>
+      <div id="syncLog" class="log" aria-live="polite"></div>
+    </section>
+
+    <!-- ── Existing load search ──────────────────────────────────────────── -->
+    <section class="card">
+      <div class="card-head"><span class="card-title">Load Search</span></div>
+      <div id="driverList" class="driver-list"></div>
+      <button id="searchLoadsBtn" class="btn-primary">Search Loads</button>
+      <p id="status" class="status"></p>
+    </section>
   </div>
+
   <script src="popup.js"></script>
 </body>
 </html>

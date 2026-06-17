@@ -304,3 +304,102 @@ function setStatus(msg, type) {
   statusEl.textContent = msg;
   statusEl.className = "status " + (type || "");
 }
+
+// ─── RLB Location Sync ────────────────────────────────────────────────────────
+(function () {
+  const DEFAULTS = {
+    relayBase: "https://relay.amazon.co.uk",
+    ontrackUrl: "https://ontrack-api.agilecyber.com/api/v1/rlb-locations",
+    token: "",
+    letters: "abcdefghijklmnopqrstuvwxyz",
+    prefix: ", ",
+    delayMs: 500,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    toggle: $("toggleSettings"),
+    settings: $("settings"),
+    ontrackUrl: $("ontrackUrl"),
+    token: $("token"),
+    relayBase: $("relayBase"),
+    prefix: $("prefix"),
+    letters: $("letters"),
+    delayMs: $("delayMs"),
+    save: $("saveSettings"),
+    sync: $("syncBtn"),
+    log: $("syncLog"),
+  };
+
+  function loadSettings() {
+    chrome.storage.local.get(Object.keys(DEFAULTS), (r) => {
+      const cfg = Object.assign({}, DEFAULTS, r || {});
+      els.ontrackUrl.value = cfg.ontrackUrl;
+      els.token.value = cfg.token;
+      els.relayBase.value = cfg.relayBase;
+      els.prefix.value = cfg.prefix;
+      els.letters.value = cfg.letters;
+      els.delayMs.value = cfg.delayMs;
+    });
+  }
+
+  els.toggle.addEventListener("click", () => {
+    els.settings.classList.toggle("hidden");
+  });
+
+  els.save.addEventListener("click", () => {
+    const cfg = {
+      ontrackUrl: els.ontrackUrl.value.trim() || DEFAULTS.ontrackUrl,
+      token: els.token.value.trim(),
+      relayBase: els.relayBase.value.trim() || DEFAULTS.relayBase,
+      prefix: els.prefix.value,
+      letters: els.letters.value.trim() || DEFAULTS.letters,
+      delayMs: Math.max(0, parseInt(els.delayMs.value, 10) || DEFAULTS.delayMs),
+    };
+    chrome.storage.local.set(cfg, () => appendLog({ msg: "Settings saved.", level: "success", ts: Date.now() }));
+  });
+
+  els.sync.addEventListener("click", () => {
+    els.log.innerHTML = "";
+    chrome.runtime.sendMessage({ type: "start-harvest" }, () => {
+      if (chrome.runtime.lastError) {
+        appendLog({ msg: "Error: " + chrome.runtime.lastError.message, level: "error", ts: Date.now() });
+      }
+    });
+  });
+
+  function appendLog(entry) {
+    const line = document.createElement("div");
+    line.className = "log-line log-" + (entry.level || "info");
+    const t = new Date(entry.ts || Date.now()).toLocaleTimeString();
+    line.textContent = "[" + t + "] " + entry.msg;
+    els.log.appendChild(line);
+    els.log.scrollTop = els.log.scrollHeight;
+  }
+
+  function renderLog(entries) {
+    els.log.innerHTML = "";
+    (entries || []).forEach(appendLog);
+  }
+
+  // Live updates while harvesting.
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.type === "harvest-progress" && msg.entry) appendLog(msg.entry);
+  });
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.harvestRunning) {
+      els.sync.disabled = changes.harvestRunning.newValue === true;
+      els.sync.textContent = changes.harvestRunning.newValue ? "Syncing…" : "Sync RLB Locations (a–z)";
+    }
+  });
+
+  // On open, restore settings + the last run's log.
+  loadSettings();
+  chrome.storage.local.get(["harvestLog", "harvestRunning"], (r) => {
+    renderLog(r.harvestLog);
+    if (r.harvestRunning) {
+      els.sync.disabled = true;
+      els.sync.textContent = "Syncing…";
+    }
+  });
+})();

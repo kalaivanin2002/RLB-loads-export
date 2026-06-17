@@ -1,17 +1,21 @@
 {
   "manifest_version": 3,
   "name": "RLB Load Search",
-  "version": "1.0.0",
-  "description": "Injects driver drop-off locations into the Amazon Relay load board search.",
+  "version": "1.1.0",
+  "description": "Amazon Relay load board helper: search loads per driver, and harvest RLB city locations into the OnTrack API.",
   "action": {
     "default_popup": "popup.html",
     "default_title": "RLB Load Search"
   },
-  "permissions": ["scripting", "tabs"],
+  "permissions": ["scripting", "tabs", "storage"],
   "host_permissions": [
     "https://relay.amazon.co.uk/*",
-    "https://relay.amazon.com/*"
+    "https://relay.amazon.com/*",
+    "https://ontrack-api.agilecyber.com/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "web_accessible_resources": [
     {
       "resources": ["drivers.json"],
