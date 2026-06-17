@@ -195,69 +195,35 @@ function pageInject(dropOffName) {
   }
 
   async function setEquipment() {
-    // Close any open dropdown (origin listbox) with Escape then a body click
+    // Close any open dropdown (origin listbox)
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await wait(300);
     document.body.click();
     await wait(600);
 
-    // Click the outer container to open the dropdown — clicking the input alone
-    // doesn't trigger the React open handler on this component
-    const equipContainer = document.querySelector("#equipment-trailer-filter");
-    if (!equipContainer) { console.error("[RLB] equipment container not found"); return; }
+    // The dropdown is always in DOM — find the REQUIRED checkbox directly
+    const checkbox = document.querySelector('#equipment-type-filter-dropdown [role="checkbox"][id="REQUIRED"]');
+    if (!checkbox) { console.error("[RLB] REQUIRED checkbox not found"); return; }
 
-    equipContainer.click();
+    // Focus + click the checkbox element itself
+    checkbox.focus();
+    await wait(150);
+
+    // Dispatch mousedown → mouseup → click — React needs the full sequence
+    ["mousedown", "mouseup", "click"].forEach((type) =>
+      checkbox.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }))
+    );
     await wait(200);
 
-    const equipInput = equipContainer.querySelector('input');
-    if (equipInput) {
-      equipInput.focus();
-      await wait(200);
-      equipInput.click();
-      await wait(200);
-    }
+    // Also fire Space keydown/keyup in case React handles keyboard toggle
+    checkbox.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true }));
+    checkbox.dispatchEvent(new KeyboardEvent("keyup",   { key: " ", code: "Space", bubbles: true, cancelable: true }));
+    await wait(500);
 
-    // Also try clicking the inner input wrapper div (mdn-input-box)
-    const inputBox = equipContainer.querySelector('[mdn-input-box]');
-    if (inputBox) {
-      inputBox.click();
-      await wait(800);
-    }
+    // Verify it worked
+    const checked = checkbox.getAttribute("aria-checked");
+    console.log("[RLB] REQUIRED checkbox aria-checked:", checked);
 
-    // The dropdown div is always in DOM — wait for it to become visible (have children rendered)
-    let dropdown = null;
-    for (let i = 0; i < 10; i++) {
-      const el = document.querySelector("#equipment-type-filter-dropdown");
-      if (el && el.querySelector('[role="checkbox"]')) { dropdown = el; break; }
-      await wait(300);
-    }
-    if (!dropdown) { console.error("[RLB] equipment dropdown not found"); return; }
-
-    // The checkboxes are custom React divs with role="checkbox" and id="REQUIRED"/"PROVIDED"/"OTHER"
-    // "Tractor and trailer" maps to id="REQUIRED"
-    const checkbox = dropdown.querySelector('[role="checkbox"][id="REQUIRED"]');
-
-    if (checkbox) {
-      checkbox.click();
-      await wait(500);
-    } else {
-      // Fallback: find by searching for a region containing "tractor and trailer" text
-      // and click the [role="checkbox"] inside it
-      const regions = [...dropdown.querySelectorAll('[role="region"]')];
-      const tractorRegion = regions.find((r) =>
-        r.textContent.trim().toLowerCase().includes("tractor and trailer")
-      );
-      const fallbackCheckbox = tractorRegion?.querySelector('[role="checkbox"]');
-      if (fallbackCheckbox) {
-        fallbackCheckbox.click();
-        await wait(500);
-      } else {
-        console.warn("[RLB] Tractor and trailer checkbox not found");
-      }
-    }
-
-    // Close the equipment dropdown by clicking outside
-    await wait(200);
     document.body.click();
     await wait(300);
   }
