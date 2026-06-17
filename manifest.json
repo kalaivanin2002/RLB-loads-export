@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "RLB Load Search",
+  "version": "1.0.0",
+  "description": "Injects driver drop-off locations into the Amazon Relay load board search.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "RLB Load Search"
+  },
+  "permissions": ["scripting", "tabs"],
+  "host_permissions": [
+    "https://relay.amazon.co.uk/*",
+    "https://relay.amazon.com/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["drivers.json"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

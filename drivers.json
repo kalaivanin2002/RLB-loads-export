@@ -1,0 +1,52 @@
+{
+  "companyId": "COMP001",
+  "drivers": [
+    {
+      "driverId": "DRV1001",
+      "driverName": "John Smith",
+      "phoneNumber": "+44-7700-900001",
+      "tripAssigned": false,
+      "tripDetails": null
+    },
+    {
+      "driverId": "DRV1002",
+      "driverName": "David Johnson",
+      "phoneNumber": "+44-7700-900002",
+      "tripAssigned": true,
+      "tripDetails": {
+        "tripId": "TRP5001",
+        "tripStatus": "IN_PROGRESS",
+        "startDateTime": "2026-06-16T08:00:00Z",
+        "endDateTime": "2026-06-16T18:00:00Z",
+        "pickupLocation": {
+          "name": "Luton, UK",
+          "latitude": 51.8787,
+          "longitude": -0.4200
+        },
+        "dropOffLocation": {
+          "name": "Dartford, UK",
+          "latitude": 51.4463,
+          "longitude": 0.2175
+        }
+      }
+    },
+    {
+      "driverId": "DRV1003",
+      "driverName": "Michael Brown",
+      "phoneNumber": "+44-7700-900003",
+      "tripAssigned": true,
+      "tripDetails": {
+        "tripId": "TRP5002",
+        "tripStatus": "COMPLETED",
+        "startDateTime": "2026-06-16T09:00:00Z",
+        "endDateTime": "2026-06-16T18:00:00Z",
+        "pickupLocation": {
+          "name": "Weybridge, Surrey"
+        },
+        "dropOffLocation": {
+          "name": "Luton, UK"
+        }
+      }
+    }
+  ]
+}

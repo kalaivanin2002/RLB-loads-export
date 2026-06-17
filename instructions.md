@@ -1,0 +1,1 @@
+ If you encounter any **Book** option, button, link, or action anywhere in the workflow, do **not** click, select, interact with, or modify it under any circumstances. Always skip it and proceed with the remaining steps.
