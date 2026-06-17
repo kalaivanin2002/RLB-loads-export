@@ -172,67 +172,51 @@ function pageInject(dropOffName) {
     return selected || inputValue || "";
   }
 
+  function isVisible(el) {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return rect.width > 0 &&
+      rect.height > 0 &&
+      style.visibility !== "hidden" &&
+      style.display !== "none";
+  }
+
+  function getOptionTexts(option) {
+    return [
+      option.getAttribute("aria-label"),
+      option.textContent,
+      option.closest("label")?.textContent,
+      option.parentElement?.textContent,
+      option.getAttribute("value"),
+      option.id,
+    ].filter(Boolean).map(normalize);
+  }
+
   function typeInto(input, value) {
     const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
     nativeSetter.call(input, value);
     ["focus", "input", "change"].forEach((name) =>
       input.dispatchEvent(new Event(name, { bubbles: true }))
     );
-    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true }));
-    input.dispatchEvent(new KeyboardEvent("keyup",   { bubbles: true, cancelable: true }));
   }
 
   async function clearInput(input) {
     input.focus();
     await wait(100);
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", code: "KeyA", ctrlKey: true, bubbles: true, cancelable: true }));
-    input.dispatchEvent(new KeyboardEvent("keyup", { key: "a", code: "KeyA", ctrlKey: true, bubbles: true, cancelable: true }));
     typeInto(input, "");
     await wait(120);
   }
 
-  async function typeLikeUser(input, value) {
-    await clearInput(input);
-    for (const char of value) {
-      const nextValue = `${input.value || ""}${char}`;
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: char, bubbles: true, cancelable: true }));
-      typeInto(input, nextValue);
-      input.dispatchEvent(new KeyboardEvent("keyup", { key: char, bubbles: true, cancelable: true }));
-      await wait(60);
-    }
-  }
-
-  async function chooseOptionFromOverlay({ query, matchers, exactValue }) {
-    const overlay = await waitFor(() => {
-      const candidates = [
-        ...document.querySelectorAll('[role="listbox"]'),
-        ...document.querySelectorAll('[id^="options-list-"]'),
-        ...document.querySelectorAll('[role="dialog"]'),
-      ];
-      return candidates.find((candidate) => {
-        const text = normalize(candidate.textContent);
-        return text && (text.includes(normalize(query)) || matchers.some((matcher) => text.includes(matcher)));
-      });
+  async function chooseVisibleOption({ matchers, exactValue, selector }) {
+    return waitFor(() => {
+      const options = [...document.querySelectorAll(selector)].filter(isVisible);
+      return options.find((option) => {
+        const texts = getOptionTexts(option);
+        if (exactValue && texts.some((text) => text === exactValue)) return true;
+        return matchers.some((matcher) => texts.some((text) => text.includes(matcher)));
+      }) || null;
     }, { timeout: 7000, interval: 200 });
-
-    if (!overlay) return null;
-
-    const options = [
-      ...overlay.querySelectorAll('[role="option"]'),
-      ...overlay.querySelectorAll('button'),
-      ...overlay.querySelectorAll('[role="checkbox"]'),
-      ...overlay.querySelectorAll('input[type="checkbox"]'),
-    ];
-
-    return options.find((option) => {
-      const text = normalize([
-        option.getAttribute("aria-label"),
-        option.textContent,
-        option.closest("label")?.textContent,
-        option.parentElement?.textContent,
-      ].filter(Boolean).join(" "));
-      return exactValue ? text === exactValue : matchers.some((matcher) => text.includes(matcher));
-    }) || null;
   }
 
   async function setDestination() {
@@ -246,13 +230,14 @@ function pageInject(dropOffName) {
 
     const normalizedDropOff = normalize(dropOffName);
     const cityOnly = normalize(dropOffName.split(",")[0]);
-    await typeLikeUser(input, dropOffName);
+    await clearInput(input);
+    typeInto(input, dropOffName);
     await wait(1200);
 
-    const match = await chooseOptionFromOverlay({
-      query: dropOffName,
+    const match = await chooseVisibleOption({
       matchers: [normalizedDropOff, cityOnly],
       exactValue: normalizedDropOff,
+      selector: '[role="option"]',
     });
 
     if (match) {
@@ -278,6 +263,8 @@ function pageInject(dropOffName) {
       console.log("[RLB] origin committed value:", getSelectedText(wrapper) || input.value || dropOffName);
     } else {
       console.warn("[RLB] no suggestion matched:", dropOffName);
+      clickElement(document.body);
+      await wait(300);
     }
   }
 
@@ -294,13 +281,14 @@ function pageInject(dropOffName) {
 
     clickElement(inputBox || equipInput || equipContainer);
     await wait(200);
-    await typeLikeUser(equipInput, "required");
+    await clearInput(equipInput);
+    typeInto(equipInput, "required");
     await wait(800);
 
-    const option = await chooseOptionFromOverlay({
-      query: "required",
+    const option = await chooseVisibleOption({
       matchers: ["required", "required trailer", "required equipment"],
-      exactValue: null,
+      exactValue: "required",
+      selector: '[role="checkbox"], [role="option"], button, input[type="checkbox"]',
     });
 
     if (option) {
@@ -309,9 +297,6 @@ function pageInject(dropOffName) {
     } else {
       console.warn("[RLB] REQUIRED option not found in overlay, trying Enter from input");
       equipInput.focus();
-      equipInput.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", bubbles: true, cancelable: true }));
-      equipInput.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowDown", code: "ArrowDown", bubbles: true, cancelable: true }));
-      await wait(200);
       equipInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
       equipInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
       await wait(400);
