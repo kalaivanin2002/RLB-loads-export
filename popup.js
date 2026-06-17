@@ -141,8 +141,10 @@ async function exportLoads(tabId, dropOff) {
 
 // ─── Runs inside the page ─────────────────────────────────────────────────────
 function pageInject(dropOffName) {
+  const INJECT_VERSION = "2026-06-17b";
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const normalize = (value) => (value || "").replace(/\s+/g, " ").trim().toLowerCase();
+  console.log("[RLB] injector version:", INJECT_VERSION);
 
   async function waitFor(getValue, { timeout = 6000, interval = 150 } = {}) {
     const start = Date.now();
@@ -180,6 +182,59 @@ function pageInject(dropOffName) {
     input.dispatchEvent(new KeyboardEvent("keyup",   { bubbles: true, cancelable: true }));
   }
 
+  async function clearInput(input) {
+    input.focus();
+    await wait(100);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", code: "KeyA", ctrlKey: true, bubbles: true, cancelable: true }));
+    input.dispatchEvent(new KeyboardEvent("keyup", { key: "a", code: "KeyA", ctrlKey: true, bubbles: true, cancelable: true }));
+    typeInto(input, "");
+    await wait(120);
+  }
+
+  async function typeLikeUser(input, value) {
+    await clearInput(input);
+    for (const char of value) {
+      const nextValue = `${input.value || ""}${char}`;
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: char, bubbles: true, cancelable: true }));
+      typeInto(input, nextValue);
+      input.dispatchEvent(new KeyboardEvent("keyup", { key: char, bubbles: true, cancelable: true }));
+      await wait(60);
+    }
+  }
+
+  async function chooseOptionFromOverlay({ query, matchers, exactValue }) {
+    const overlay = await waitFor(() => {
+      const candidates = [
+        ...document.querySelectorAll('[role="listbox"]'),
+        ...document.querySelectorAll('[id^="options-list-"]'),
+        ...document.querySelectorAll('[role="dialog"]'),
+      ];
+      return candidates.find((candidate) => {
+        const text = normalize(candidate.textContent);
+        return text && (text.includes(normalize(query)) || matchers.some((matcher) => text.includes(matcher)));
+      });
+    }, { timeout: 7000, interval: 200 });
+
+    if (!overlay) return null;
+
+    const options = [
+      ...overlay.querySelectorAll('[role="option"]'),
+      ...overlay.querySelectorAll('button'),
+      ...overlay.querySelectorAll('[role="checkbox"]'),
+      ...overlay.querySelectorAll('input[type="checkbox"]'),
+    ];
+
+    return options.find((option) => {
+      const text = normalize([
+        option.getAttribute("aria-label"),
+        option.textContent,
+        option.closest("label")?.textContent,
+        option.parentElement?.textContent,
+      ].filter(Boolean).join(" "));
+      return exactValue ? text === exactValue : matchers.some((matcher) => text.includes(matcher));
+    }) || null;
+  }
+
   async function setDestination() {
     const input = document.querySelector('#rlb-origin-city-filter input[role="combobox"]') ||
                   document.querySelector('input[placeholder="Start typing to search"]');
@@ -189,36 +244,27 @@ function pageInject(dropOffName) {
     clickElement(wrapper || input);
     await wait(200);
 
-    input.focus();
-    await wait(150);
-    typeInto(input, "");
-    await wait(100);
-    typeInto(input, dropOffName);
-    await wait(300);
-
-    const listbox = await waitFor(() => {
-      const listboxId = input.getAttribute("aria-controls");
-      return listboxId
-      ? document.getElementById(listboxId)
-      : document.querySelector('[role="listbox"]');
-    }, { timeout: 5000, interval: 200 });
-
-    if (!listbox) { console.warn("[RLB] origin listbox not found"); return; }
-
-    const options = [...listbox.querySelectorAll('[role="option"]')];
     const normalizedDropOff = normalize(dropOffName);
     const cityOnly = normalize(dropOffName.split(",")[0]);
-    const match = options.find((o) => normalize(o.textContent) === normalizedDropOff) ||
-      options.find((o) => normalize(o.getAttribute("aria-label")) === normalizedDropOff) ||
-      options.find((o) => normalize(o.textContent).includes(cityOnly)) ||
-      options.find((o) => normalize(o.getAttribute("aria-label")).includes(cityOnly)) ||
-      options[0];
+    await typeLikeUser(input, dropOffName);
+    await wait(1200);
+
+    const match = await chooseOptionFromOverlay({
+      query: dropOffName,
+      matchers: [normalizedDropOff, cityOnly],
+      exactValue: normalizedDropOff,
+    });
 
     if (match) {
       clickElement(match);
+      await wait(400);
+      clickElement(document.body);
       const committed = await waitFor(() => {
-        const value = document.querySelector("#rlb-origin-city-filter-value")?.textContent?.trim();
-        return normalize(value).includes(cityOnly) ? value : null;
+        const visibleValue = getSelectedText(wrapper);
+        const chipText = normalize(document.body.innerText);
+        if (normalize(visibleValue).includes(cityOnly)) return visibleValue;
+        if (chipText.includes(normalizedDropOff)) return dropOffName;
+        return null;
       }, { timeout: 4000, interval: 200 });
 
       if (!committed) {
@@ -229,7 +275,7 @@ function pageInject(dropOffName) {
         await wait(500);
       }
 
-      console.log("[RLB] origin committed value:", document.querySelector("#rlb-origin-city-filter-value")?.textContent?.trim());
+      console.log("[RLB] origin committed value:", getSelectedText(wrapper) || input.value || dropOffName);
     } else {
       console.warn("[RLB] no suggestion matched:", dropOffName);
     }
@@ -241,79 +287,47 @@ function pageInject(dropOffName) {
 
     const inputBox = equipContainer.querySelector('[mdn-input-box]');
     const equipInput = equipContainer.querySelector('input');
-    const openEquipmentDropdown = async () => {
-      clickElement(inputBox || equipInput || equipContainer);
-      if (equipInput) equipInput.focus();
-      return waitFor(() =>
-        document.getElementById("equipment-type-filter-dropdown") ||
-        document.querySelector('[id^="equipment-type-filter-dropdown"]') ||
-        document.querySelector('[role="listbox"][aria-multiselectable="true"]') ||
-        document.querySelector('[role="dialog"] [role="checkbox"]')?.closest('[role="dialog"]'),
-      { timeout: 4000, interval: 200 });
-    };
-
-    const dropdown = await openEquipmentDropdown();
-    if (!dropdown) {
-      console.error("[RLB] equipment dropdown not found");
+    if (!equipInput) {
+      console.error("[RLB] equipment input not found");
       return;
     }
 
-    const labelMatch = (text) => {
-      const normalized = normalize(text);
-      return normalized === "required" ||
-        normalized.includes("required trailer") ||
-        normalized.includes("required equipment");
-    };
+    clickElement(inputBox || equipInput || equipContainer);
+    await wait(200);
+    await typeLikeUser(equipInput, "required");
+    await wait(800);
 
-    const checkbox = await waitFor(() => {
-      const candidates = [
-        ...dropdown.querySelectorAll('[role="checkbox"]'),
-        ...dropdown.querySelectorAll('input[type="checkbox"]'),
-        ...dropdown.querySelectorAll('button[role="option"]'),
-        ...dropdown.querySelectorAll('[role="option"]'),
-      ];
-      return candidates.find((el) => {
-        const text = [
-          el.getAttribute("aria-label"),
-          el.getAttribute("value"),
-          el.id,
-          el.textContent,
-          el.closest("label")?.textContent,
-          el.parentElement?.textContent,
-        ].filter(Boolean).join(" ");
-        return labelMatch(text);
-      });
-    }, { timeout: 5000, interval: 200 });
+    const option = await chooseOptionFromOverlay({
+      query: "required",
+      matchers: ["required", "required trailer", "required equipment"],
+      exactValue: null,
+    });
 
-    if (!checkbox) {
-      const all = [...dropdown.querySelectorAll('[role="checkbox"], [role="option"], input[type="checkbox"]')];
-      console.error("[RLB] REQUIRED option not found:", all.map((el) => ({
-        id: el.id,
-        role: el.getAttribute("role"),
-        value: el.getAttribute("value"),
-        ariaLabel: el.getAttribute("aria-label"),
-        text: el.textContent?.trim(),
-      })));
-      return;
+    if (option) {
+      clickElement(option.closest("label") || option);
+      await wait(400);
+    } else {
+      console.warn("[RLB] REQUIRED option not found in overlay, trying Enter from input");
+      equipInput.focus();
+      equipInput.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", bubbles: true, cancelable: true }));
+      equipInput.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowDown", code: "ArrowDown", bubbles: true, cancelable: true }));
+      await wait(200);
+      equipInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+      equipInput.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+      await wait(400);
     }
-
-    clickElement(checkbox.closest("label") || checkbox);
-    await wait(400);
 
     const selectedEquipment = await waitFor(() => {
-      const value = getSelectedText(equipContainer);
+      const value = getSelectedText(equipContainer) || equipInput.value;
       return normalize(value).includes("required") ? value : null;
     }, { timeout: 4000, interval: 200 });
 
     if (!selectedEquipment) {
-      console.warn("[RLB] equipment did not show as selected, retrying with keyboard");
-      checkbox.focus?.();
-      checkbox.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true }));
-      checkbox.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", bubbles: true, cancelable: true }));
-      await wait(500);
+      console.error("[RLB] equipment selection did not commit");
+      return;
     }
 
-    console.log("[RLB] equipment selected value:", getSelectedText(equipContainer));
+    console.log("[RLB] equipment selected value:", selectedEquipment);
 
     clickElement(document.body);
     await wait(400);
