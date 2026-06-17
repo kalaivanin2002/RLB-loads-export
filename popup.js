@@ -142,6 +142,33 @@ async function exportLoads(tabId, dropOff) {
 // ─── Runs inside the page ─────────────────────────────────────────────────────
 function pageInject(dropOffName) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const normalize = (value) => (value || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+  async function waitFor(getValue, { timeout = 6000, interval = 150 } = {}) {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      const value = getValue();
+      if (value) return value;
+      await wait(interval);
+    }
+    return null;
+  }
+
+  function clickElement(el) {
+    if (!el) return;
+    const pointerTypes = ["pointerdown", "mousedown", "pointerup", "mouseup"];
+    pointerTypes.forEach((type) => {
+      const EventCtor = window.PointerEvent || window.MouseEvent;
+      el.dispatchEvent(new EventCtor(type, { bubbles: true, cancelable: true }));
+    });
+    el.click();
+  }
+
+  function getSelectedText(container) {
+    const selected = container?.querySelector("[mdn-select-value]")?.textContent?.trim();
+    const inputValue = container?.querySelector('input')?.value?.trim();
+    return selected || inputValue || "";
+  }
 
   function typeInto(input, value) {
     const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
@@ -159,7 +186,7 @@ function pageInject(dropOffName) {
     if (!input) { console.error("[RLB] origin input not found"); return; }
 
     const wrapper = document.querySelector("#rlb-origin-city-filter");
-    if (wrapper) wrapper.click();
+    clickElement(wrapper || input);
     await wait(200);
 
     input.focus();
@@ -167,107 +194,128 @@ function pageInject(dropOffName) {
     typeInto(input, "");
     await wait(100);
     typeInto(input, dropOffName);
-    await wait(1800);
+    await wait(300);
 
-    const listboxId = input.getAttribute("aria-controls");
-    const listbox = listboxId
+    const listbox = await waitFor(() => {
+      const listboxId = input.getAttribute("aria-controls");
+      return listboxId
       ? document.getElementById(listboxId)
       : document.querySelector('[role="listbox"]');
+    }, { timeout: 5000, interval: 200 });
 
     if (!listbox) { console.warn("[RLB] origin listbox not found"); return; }
 
     const options = [...listbox.querySelectorAll('[role="option"]')];
-    const match = options.find(
-      (o) => o.textContent.trim().toLowerCase().includes(dropOffName.toLowerCase().split(",")[0])
-    ) || options[0];
+    const normalizedDropOff = normalize(dropOffName);
+    const cityOnly = normalize(dropOffName.split(",")[0]);
+    const match = options.find((o) => normalize(o.textContent) === normalizedDropOff) ||
+      options.find((o) => normalize(o.getAttribute("aria-label")) === normalizedDropOff) ||
+      options.find((o) => normalize(o.textContent).includes(cityOnly)) ||
+      options.find((o) => normalize(o.getAttribute("aria-label")).includes(cityOnly)) ||
+      options[0];
 
     if (match) {
-      // React listbox options commit on pointerdown — fire that first, then click
-      ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) =>
-        match.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true }))
-      );
-      await wait(1000);
-      const committed = document.querySelector("#rlb-origin-city-filter-value")?.textContent?.trim();
-      console.log("[RLB] origin committed value:", committed);
+      clickElement(match);
+      const committed = await waitFor(() => {
+        const value = document.querySelector("#rlb-origin-city-filter-value")?.textContent?.trim();
+        return normalize(value).includes(cityOnly) ? value : null;
+      }, { timeout: 4000, interval: 200 });
+
+      if (!committed) {
+        console.warn("[RLB] origin did not commit via click, trying Enter");
+        input.focus();
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+        input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+        await wait(500);
+      }
+
+      console.log("[RLB] origin committed value:", document.querySelector("#rlb-origin-city-filter-value")?.textContent?.trim());
     } else {
       console.warn("[RLB] no suggestion matched:", dropOffName);
     }
   }
 
   async function setEquipment() {
-    // The equipment dropdown is lazy-rendered — #equipment-type-filter-dropdown doesn't
-    // exist until the user interacts with the input. We must open it first.
-
-    // Step 1: find the mdn-input-box wrapper inside #equipment-trailer-filter and click it
     const equipContainer = document.getElementById("equipment-trailer-filter");
     if (!equipContainer) { console.error("[RLB] equipment-trailer-filter not found"); return; }
 
     const inputBox = equipContainer.querySelector('[mdn-input-box]');
     const equipInput = equipContainer.querySelector('input');
+    const openEquipmentDropdown = async () => {
+      clickElement(inputBox || equipInput || equipContainer);
+      if (equipInput) equipInput.focus();
+      return waitFor(() =>
+        document.getElementById("equipment-type-filter-dropdown") ||
+        document.querySelector('[id^="equipment-type-filter-dropdown"]') ||
+        document.querySelector('[role="listbox"][aria-multiselectable="true"]') ||
+        document.querySelector('[role="dialog"] [role="checkbox"]')?.closest('[role="dialog"]'),
+      { timeout: 4000, interval: 200 });
+    };
 
-    // Focus the input first
-    if (equipInput) {
-      equipInput.focus();
-      await wait(300);
-    }
-
-    // Click the mdn-input-box wrapper — React's open handler is on the wrapper, not the input
-    if (inputBox) {
-      ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) =>
-        inputBox.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true }))
-      );
-    }
-    // Also click the input itself
-    if (equipInput) {
-      ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) =>
-        equipInput.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true }))
-      );
-    }
-    await wait(300);
-
-    // Step 2: poll until the dropdown and REQUIRED checkbox appear in DOM
-    let checkbox = null;
-    for (let i = 0; i < 20; i++) {
-      const dropdown = document.getElementById("equipment-type-filter-dropdown");
-      if (dropdown) {
-        checkbox = dropdown.querySelector('[role="checkbox"][id="REQUIRED"]') ||
-                   dropdown.querySelector('[role="checkbox"][value="REQUIRED"]');
-        if (checkbox) { console.log("[RLB] REQUIRED checkbox found, attempt", i + 1); break; }
-      }
-      // Re-click every 3 attempts in case the first click didn't register
-      if (i > 0 && i % 3 === 0) {
-        if (equipInput) {
-          ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) =>
-            equipInput.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true }))
-          );
-        }
-        console.log(`[RLB] re-clicking equipment input, attempt ${i + 1}`);
-      }
-      await wait(500);
-    }
-
-    if (!checkbox) {
-      const all = [...document.querySelectorAll('[role="checkbox"]')];
-      const dropdown = document.getElementById("equipment-type-filter-dropdown");
-      console.error("[RLB] REQUIRED checkbox not found. Dropdown in DOM:", !!dropdown, "All checkboxes:", all.map(el => `id=${el.id} value=${el.getAttribute("value")}`));
+    const dropdown = await openEquipmentDropdown();
+    if (!dropdown) {
+      console.error("[RLB] equipment dropdown not found");
       return;
     }
 
-    // Step 3: click the REQUIRED checkbox
-    checkbox.focus();
-    await wait(100);
-    ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) =>
-      checkbox.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true }))
-    );
-    await wait(300);
-    checkbox.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true }));
-    checkbox.dispatchEvent(new KeyboardEvent("keyup",   { key: " ", code: "Space", bubbles: true, cancelable: true }));
-    await wait(500);
+    const labelMatch = (text) => {
+      const normalized = normalize(text);
+      return normalized === "required" ||
+        normalized.includes("required trailer") ||
+        normalized.includes("required equipment");
+    };
 
-    console.log("[RLB] REQUIRED checkbox aria-checked:", checkbox.getAttribute("aria-checked"));
+    const checkbox = await waitFor(() => {
+      const candidates = [
+        ...dropdown.querySelectorAll('[role="checkbox"]'),
+        ...dropdown.querySelectorAll('input[type="checkbox"]'),
+        ...dropdown.querySelectorAll('button[role="option"]'),
+        ...dropdown.querySelectorAll('[role="option"]'),
+      ];
+      return candidates.find((el) => {
+        const text = [
+          el.getAttribute("aria-label"),
+          el.getAttribute("value"),
+          el.id,
+          el.textContent,
+          el.closest("label")?.textContent,
+          el.parentElement?.textContent,
+        ].filter(Boolean).join(" ");
+        return labelMatch(text);
+      });
+    }, { timeout: 5000, interval: 200 });
 
-    // Step 4: close the dropdown by clicking outside
-    document.body.click();
+    if (!checkbox) {
+      const all = [...dropdown.querySelectorAll('[role="checkbox"], [role="option"], input[type="checkbox"]')];
+      console.error("[RLB] REQUIRED option not found:", all.map((el) => ({
+        id: el.id,
+        role: el.getAttribute("role"),
+        value: el.getAttribute("value"),
+        ariaLabel: el.getAttribute("aria-label"),
+        text: el.textContent?.trim(),
+      })));
+      return;
+    }
+
+    clickElement(checkbox.closest("label") || checkbox);
+    await wait(400);
+
+    const selectedEquipment = await waitFor(() => {
+      const value = getSelectedText(equipContainer);
+      return normalize(value).includes("required") ? value : null;
+    }, { timeout: 4000, interval: 200 });
+
+    if (!selectedEquipment) {
+      console.warn("[RLB] equipment did not show as selected, retrying with keyboard");
+      checkbox.focus?.();
+      checkbox.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true }));
+      checkbox.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", bubbles: true, cancelable: true }));
+      await wait(500);
+    }
+
+    console.log("[RLB] equipment selected value:", getSelectedText(equipContainer));
+
+    clickElement(document.body);
     await wait(400);
   }
 
