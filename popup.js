@@ -182,16 +182,11 @@ function pageInject(dropOffName) {
     ) || options[0];
 
     if (match) {
-      // Fire full mouse sequence on the option so React's onMouseDown/onClick both fire
-      ["mouseenter", "mouseover", "mousedown", "mouseup", "click"].forEach((type) =>
-        match.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }))
+      // React listbox options commit on pointerdown — fire that first, then click
+      ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) =>
+        match.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true }))
       );
-      await wait(800);
-      // Do NOT click body — that dismisses the selection before React commits it.
-      // Just blur the input to close the listbox cleanly.
-      input.dispatchEvent(new Event("blur", { bubbles: true }));
-      await wait(500);
-      // Confirm the value was committed
+      await wait(1000);
       const committed = document.querySelector("#rlb-origin-city-filter-value")?.textContent?.trim();
       console.log("[RLB] origin committed value:", committed);
     } else {
@@ -200,49 +195,80 @@ function pageInject(dropOffName) {
   }
 
   async function setEquipment() {
-    // Close any open dropdown (origin listbox)
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await wait(300);
-    document.body.click();
-    await wait(600);
+    // The equipment dropdown is lazy-rendered — #equipment-type-filter-dropdown doesn't
+    // exist until the user interacts with the input. We must open it first.
 
-    // Poll for the REQUIRED checkbox — the dropdown may not be in DOM yet if page is still hydrating
+    // Step 1: find the mdn-input-box wrapper inside #equipment-trailer-filter and click it
+    const equipContainer = document.getElementById("equipment-trailer-filter");
+    if (!equipContainer) { console.error("[RLB] equipment-trailer-filter not found"); return; }
+
+    const inputBox = equipContainer.querySelector('[mdn-input-box]');
+    const equipInput = equipContainer.querySelector('input');
+
+    // Focus the input first
+    if (equipInput) {
+      equipInput.focus();
+      await wait(300);
+    }
+
+    // Click the mdn-input-box wrapper — React's open handler is on the wrapper, not the input
+    if (inputBox) {
+      ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) =>
+        inputBox.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true }))
+      );
+    }
+    // Also click the input itself
+    if (equipInput) {
+      ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) =>
+        equipInput.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true }))
+      );
+    }
+    await wait(300);
+
+    // Step 2: poll until the dropdown and REQUIRED checkbox appear in DOM
     let checkbox = null;
     for (let i = 0; i < 20; i++) {
-      checkbox = document.querySelector('[role="checkbox"][id="REQUIRED"]') ||
-                 document.getElementById("REQUIRED");
-      if (checkbox) break;
-      console.log(`[RLB] waiting for REQUIRED checkbox... attempt ${i + 1}`);
+      const dropdown = document.getElementById("equipment-type-filter-dropdown");
+      if (dropdown) {
+        checkbox = dropdown.querySelector('[role="checkbox"][id="REQUIRED"]') ||
+                   dropdown.querySelector('[role="checkbox"][value="REQUIRED"]');
+        if (checkbox) { console.log("[RLB] REQUIRED checkbox found, attempt", i + 1); break; }
+      }
+      // Re-click every 3 attempts in case the first click didn't register
+      if (i > 0 && i % 3 === 0) {
+        if (equipInput) {
+          ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) =>
+            equipInput.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true }))
+          );
+        }
+        console.log(`[RLB] re-clicking equipment input, attempt ${i + 1}`);
+      }
       await wait(500);
     }
+
     if (!checkbox) {
-      // Last resort: dump all role="checkbox" elements to console so we can see what's there
       const all = [...document.querySelectorAll('[role="checkbox"]')];
-      console.error("[RLB] REQUIRED checkbox not found. All checkboxes:", all.map(el => `id=${el.id} val=${el.getAttribute("value")}`));
+      const dropdown = document.getElementById("equipment-type-filter-dropdown");
+      console.error("[RLB] REQUIRED checkbox not found. Dropdown in DOM:", !!dropdown, "All checkboxes:", all.map(el => `id=${el.id} value=${el.getAttribute("value")}`));
       return;
     }
 
-    // Focus + click the checkbox element itself
+    // Step 3: click the REQUIRED checkbox
     checkbox.focus();
-    await wait(150);
-
-    // Dispatch mousedown → mouseup → click — React needs the full sequence
-    ["mousedown", "mouseup", "click"].forEach((type) =>
-      checkbox.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }))
+    await wait(100);
+    ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) =>
+      checkbox.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true }))
     );
-    await wait(200);
-
-    // Also fire Space keydown/keyup in case React handles keyboard toggle
+    await wait(300);
     checkbox.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true, cancelable: true }));
     checkbox.dispatchEvent(new KeyboardEvent("keyup",   { key: " ", code: "Space", bubbles: true, cancelable: true }));
     await wait(500);
 
-    // Verify it worked
-    const checked = checkbox.getAttribute("aria-checked");
-    console.log("[RLB] REQUIRED checkbox aria-checked:", checked);
+    console.log("[RLB] REQUIRED checkbox aria-checked:", checkbox.getAttribute("aria-checked"));
 
+    // Step 4: close the dropdown by clicking outside
     document.body.click();
-    await wait(300);
+    await wait(400);
   }
 
   async function clickSearchLoads() {
