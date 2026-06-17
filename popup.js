@@ -201,20 +201,36 @@ function pageInject(dropOffName) {
     document.body.click();
     await wait(600);
 
-    const equipInput =
-      document.querySelector('input[aria-label="Equipment*"]') ||
-      document.querySelector('#equipment-trailer-filter input');
+    // Click the outer container to open the dropdown — clicking the input alone
+    // doesn't trigger the React open handler on this component
+    const equipContainer = document.querySelector("#equipment-trailer-filter");
+    if (!equipContainer) { console.error("[RLB] equipment container not found"); return; }
 
-    if (!equipInput) { console.error("[RLB] equipment input not found"); return; }
-
-    // Open the equipment dropdown
-    equipInput.focus();
+    equipContainer.click();
     await wait(200);
-    equipInput.click();
-    await wait(1200);
 
-    // The dropdown div is always in DOM with id="equipment-type-filter-dropdown"
-    const dropdown = document.querySelector("#equipment-type-filter-dropdown");
+    const equipInput = equipContainer.querySelector('input');
+    if (equipInput) {
+      equipInput.focus();
+      await wait(200);
+      equipInput.click();
+      await wait(200);
+    }
+
+    // Also try clicking the inner input wrapper div (mdn-input-box)
+    const inputBox = equipContainer.querySelector('[mdn-input-box]');
+    if (inputBox) {
+      inputBox.click();
+      await wait(800);
+    }
+
+    // The dropdown div is always in DOM — wait for it to become visible (have children rendered)
+    let dropdown = null;
+    for (let i = 0; i < 10; i++) {
+      const el = document.querySelector("#equipment-type-filter-dropdown");
+      if (el && el.querySelector('[role="checkbox"]')) { dropdown = el; break; }
+      await wait(300);
+    }
     if (!dropdown) { console.error("[RLB] equipment dropdown not found"); return; }
 
     // The checkboxes are custom React divs with role="checkbox" and id="REQUIRED"/"PROVIDED"/"OTHER"
