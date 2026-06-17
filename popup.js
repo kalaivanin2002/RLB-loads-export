@@ -217,29 +217,26 @@ function pageInject(dropOffName) {
     const dropdown = document.querySelector("#equipment-type-filter-dropdown");
     if (!dropdown) { console.error("[RLB] equipment dropdown not found"); return; }
 
-    // Find "Tractor and trailer" by label text — structure is <label>Tractor and trailer</label>
-    // with a sibling checkbox div inside the same parent container
-    const allLabels = [...dropdown.querySelectorAll("label")];
-    const tractorLabel = allLabels.find((l) =>
-      l.textContent.trim().toLowerCase().includes("tractor and trailer")
-    );
+    // The checkboxes are custom React divs with role="checkbox" and id="REQUIRED"/"PROVIDED"/"OTHER"
+    // "Tractor and trailer" maps to id="REQUIRED"
+    const checkbox = dropdown.querySelector('[role="checkbox"][id="REQUIRED"]');
 
-    if (tractorLabel) {
-      // Click the label itself — this toggles the associated checkbox
-      tractorLabel.click();
+    if (checkbox) {
+      checkbox.click();
       await wait(500);
     } else {
-      // Fallback: try clicking the region/section that contains "tractor" text
-      const tractorRegion = [...dropdown.querySelectorAll('[role="region"], div')].find((el) =>
-        el.childElementCount <= 3 &&
-        el.textContent.trim().toLowerCase().includes("tractor and trailer")
+      // Fallback: find by searching for a region containing "tractor and trailer" text
+      // and click the [role="checkbox"] inside it
+      const regions = [...dropdown.querySelectorAll('[role="region"]')];
+      const tractorRegion = regions.find((r) =>
+        r.textContent.trim().toLowerCase().includes("tractor and trailer")
       );
-      if (tractorRegion) {
-        tractorRegion.click();
+      const fallbackCheckbox = tractorRegion?.querySelector('[role="checkbox"]');
+      if (fallbackCheckbox) {
+        fallbackCheckbox.click();
         await wait(500);
       } else {
-        console.warn("[RLB] Tractor and trailer not found, available labels:",
-          allLabels.map((l) => l.textContent.trim()));
+        console.warn("[RLB] Tractor and trailer checkbox not found");
       }
     }
 
