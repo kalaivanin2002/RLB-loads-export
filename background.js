@@ -117,7 +117,7 @@ async function fetchCitiesInPage(tabId, cfg, query) {
 function extractEntries(data) {
   if (Array.isArray(data)) return data;
   if (!data || typeof data !== "object") return [];
-  const keys = ["cities", "results", "data", "suggestions", "items", "locations"];
+  const keys = ["entities", "cities", "results", "data", "suggestions", "items", "locations"];
   for (const k of keys) if (Array.isArray(data[k])) return data[k];
   return [];
 }
