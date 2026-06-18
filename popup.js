@@ -117,12 +117,74 @@ async function exportLoads(tabId, dropOff) {
 async function fetchLoadsViaApi(relayBase, dropOff) {
   const base = String(relayBase || "https://relay.amazon.co.uk").replace(/\/+$/, "");
 
+  const readCookie = (name) => {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = document.cookie.match(new RegExp("(?:^|; )" + escaped + "=([^;]*)"));
+    return match ? decodeURIComponent(match[1]) : "";
+  };
+
+  const readCsrfToken = () => {
+    const metaSelectors = [
+      'meta[name="csrf-token"]',
+      'meta[name="csrfToken"]',
+      'meta[name="_csrf"]',
+      'meta[name="x-csrf-token"]',
+    ];
+    for (const selector of metaSelectors) {
+      const value = document.querySelector(selector)?.getAttribute("content")?.trim();
+      if (value) return value;
+    }
+
+    const inputSelectors = [
+      'input[name="_csrf"]',
+      'input[name="csrf"]',
+      'input[name="csrf-token"]',
+    ];
+    for (const selector of inputSelectors) {
+      const value = document.querySelector(selector)?.value?.trim();
+      if (value) return value;
+    }
+
+    const cookieNames = [
+      "csrf-token",
+      "csrfToken",
+      "_csrf",
+      "XSRF-TOKEN",
+      "CSRF-TOKEN",
+    ];
+    for (const name of cookieNames) {
+      const value = readCookie(name);
+      if (value) return value;
+    }
+
+    const globals = [
+      window.__CSRF_TOKEN__,
+      window.__csrfToken,
+      window.csrfToken,
+      window._csrf,
+    ];
+    for (const value of globals) {
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+
+    return "";
+  };
+
+  const csrfToken = readCsrfToken();
+
   const fetchJson = async (url, options) => {
+    const baseHeaders = {
+      Accept: "application/json",
+    };
+    if (csrfToken) {
+      baseHeaders["X-CSRF-Token"] = csrfToken;
+      baseHeaders["csrf-token"] = csrfToken;
+      baseHeaders["X-XSRF-TOKEN"] = csrfToken;
+    }
+
     const response = await fetch(url, Object.assign({
       credentials: "include",
-      headers: {
-        Accept: "application/json",
-      },
+      headers: Object.assign(baseHeaders, options?.headers || {}),
     }, options || {}));
 
     const text = await response.text();
@@ -408,6 +470,9 @@ async function fetchLoadsViaApi(relayBase, dropOff) {
     if (!city) {
       throw new Error("No Relay city match found for " + (dropOff?.name || "selected location") + ".");
     }
+    if (!csrfToken) {
+      throw new Error("No CSRF token found on the Relay page. Open the load board search page fully, then try again.");
+    }
 
     const payload = {
       workOpportunityTypeList: ["ROUND_TRIP", "ONE_WAY"],
@@ -498,6 +563,7 @@ async function fetchLoadsViaApi(relayBase, dropOff) {
     return {
       ok: true,
       city: city,
+      csrfTokenFound: true,
       rawResponse: searchResponse,
       loads: loads,
       total: loads.length,
@@ -505,6 +571,7 @@ async function fetchLoadsViaApi(relayBase, dropOff) {
   } catch (error) {
     return {
       ok: false,
+      csrfTokenFound: Boolean(csrfToken),
       error: error && error.message ? error.message : String(error),
     };
   }
