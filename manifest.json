@@ -16,6 +16,22 @@
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["https://relay.amazon.co.uk/*", "https://relay.amazon.com/*"],
+      "js": ["hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://relay.amazon.co.uk/*", "https://relay.amazon.com/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": true
+    }
+  ],
   "web_accessible_resources": [
     {
       "resources": ["drivers.json"],

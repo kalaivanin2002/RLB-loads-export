@@ -314,7 +314,7 @@ function buildSearchPayload(loc, cfg) {
     nextItemToken: 0,
     resultSize: Number(cfg.resultSize) || 50,
     searchURL: "",
-    isAutoRefreshCall: true,
+    isAutoRefreshCall: false,
     notificationId: "",
     auditContextMap: JSON.stringify({
       rlbChannel: "EXACT_MATCH",
@@ -326,12 +326,16 @@ function buildSearchPayload(loc, cfg) {
   };
 }
 
-async function searchLoadsInPage(tabId, cfg, payload) {
+async function searchLoadsInPage(tabId, cfg, payload, csrf) {
   const url = cfg.relayBase.replace(/\/+$/, "") + "/api/loadboard/search";
+  const headers = { "Content-Type": "application/json", Accept: "application/json" };
+  if (csrf && csrf.token) {
+    headers[csrf.headerName || "anti-csrftoken-a2z"] = csrf.token;
+  }
   const r = await runInPage(tabId, url, {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: headers,
     body: JSON.stringify(payload),
   });
   if (!r.ok) throw new Error("Relay search HTTP " + r.status);
@@ -363,6 +367,75 @@ async function postIngest(cfg, searchResponse) {
   const text = await res.text();
   if (!res.ok) throw new Error("Ingest HTTP " + res.status + ": " + text.slice(0, 200));
   return text;
+}
+
+// Best-effort: find the load board's "Auto refresh" toggle and switch it off.
+// Runs in the page (DOM access). Returns { found, action }.
+function disableAutoRefreshInPage() {
+  const norm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const wantedRe = /auto[\s-]?refresh/i;
+
+  const controls = Array.from(
+    document.querySelectorAll('[role="switch"], input[type="checkbox"], button[aria-pressed], [aria-checked]')
+  );
+
+  function isOn(el) {
+    const ac = el.getAttribute && el.getAttribute("aria-checked");
+    const ap = el.getAttribute && el.getAttribute("aria-pressed");
+    if (ac != null) return ac === "true";
+    if (ap != null) return ap === "true";
+    if (typeof el.checked === "boolean") return el.checked;
+    return null;
+  }
+
+  // Return the auto-refresh label text near this control, or "" if none.
+  function labelFor(el) {
+    const aria = norm(el.getAttribute && el.getAttribute("aria-label"));
+    if (wantedRe.test(aria)) return aria;
+    if (el.id) {
+      const lbl = document.querySelector('label[for="' + (window.CSS ? CSS.escape(el.id) : el.id) + '"]');
+      if (lbl && wantedRe.test(norm(lbl.textContent))) return norm(lbl.textContent);
+    }
+    let p = el;
+    for (let i = 0; i < 4 && p; i++) {
+      const t = norm(p.textContent);
+      if (wantedRe.test(t)) return t;
+      p = p.parentElement;
+    }
+    return "";
+  }
+
+  for (const el of controls) {
+    const label = labelFor(el);
+    if (!label) continue;
+
+    let on = isOn(el);
+    // Amazon's label flips: "turn on auto-refresh" (currently off) vs
+    // "turn off auto-refresh" (currently on). Use it when aria/checked is absent.
+    if (on === null) {
+      if (/turn off auto[\s-]?refresh/.test(label)) on = true;
+      else if (/turn on auto[\s-]?refresh/.test(label)) on = false;
+    }
+
+    if (on === true) {
+      el.click();
+      return { found: true, action: "turned-off" };
+    }
+    if (on === false) {
+      return { found: true, action: "already-off" };
+    }
+    // State undetermined — do NOT click (avoid accidentally enabling it).
+    return { found: true, action: "state-unknown-left-as-is" };
+  }
+  return { found: false, action: "not-found" };
+}
+
+async function disableAutoRefresh(tabId) {
+  const res = await chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: disableAutoRefreshInPage,
+  });
+  return (res && res[0] && res[0].result) || { found: false, action: "no-result" };
 }
 
 let isFindingLoads = false;
@@ -397,6 +470,31 @@ async function findLoads() {
       await log("loads", "No saved locations returned from the API.", "warn");
       return;
     }
+    const csrfStore = await chrome.storage.local.get(["csrfToken", "csrfHeaderName"]);
+    const csrf = csrfStore.csrfToken
+      ? { token: csrfStore.csrfToken, headerName: csrfStore.csrfHeaderName }
+      : null;
+    if (!csrf) {
+      await log(
+        "loads",
+        "No CSRF token captured yet. Keep the Relay load board tab open until it fully loads / auto-refreshes (or run one search manually), then retry.",
+        "error"
+      );
+      return;
+    }
+    await log("loads", "Using captured CSRF token (" + (csrf.headerName || "anti-csrftoken-a2z") + ").");
+
+    try {
+      const ar = await disableAutoRefresh(tab.id);
+      if (ar.found) {
+        await log("loads", "Auto-refresh: " + ar.action + ".", ar.action === "not-found" ? "warn" : "success");
+      } else {
+        await log("loads", "Auto-refresh toggle not found — continuing. (Send its HTML to target it exactly.)", "warn");
+      }
+    } catch (e) {
+      await log("loads", "Auto-refresh step failed: " + (e.message || String(e)) + " — continuing.", "warn");
+    }
+
     const radius = Number(cfg.searchRadius) || 5;
     const max = Number(cfg.maxLocations) || 0;
     const toSearch = max > 0 ? locations.slice(0, max) : locations;
@@ -416,7 +514,7 @@ async function findLoads() {
       const label = loc.displayValue || loc.name || "#" + i;
       try {
         const payload = buildSearchPayload(loc, cfg);
-        const data = await searchLoadsInPage(tab.id, cfg, payload);
+        const data = await searchLoadsInPage(tab.id, cfg, payload, csrf);
         const n = countWorkOpportunities(data);
 
         results.push({ location: loc, capturedAt: new Date().toISOString(), count: n, response: data });
