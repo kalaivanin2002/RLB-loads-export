@@ -230,7 +230,7 @@ async function waitForEntitiesResponse(maxWaitMs = 15000) {
 async function navigateToInTransitPage(tabId, cfg) {
   const inTransitUrl = cfg.relayBase.replace(/\/+$/, "") + "/tours/in-transit?ref=owp_nav_tours";
   await chrome.tabs.update(tabId, { url: inTransitUrl });
-  await sleep(2000);
+  await sleep(5000);
 }
 
 function extractDriver(entity) {
@@ -293,8 +293,8 @@ async function syncInTransitTrips() {
       await log("trips", "No Amazon Relay tab found — creating one…", "info");
       const inTransitUrl = cfg.relayBase.replace(/\/+$/, "") + "/tours/in-transit?ref=owp_nav_tours";
       tab = await chrome.tabs.create({ url: inTransitUrl, active: true });
-      await sleep(3000);
-      await log("trips", "Created new tab #" + tab.id + " and navigating to In-Transit page…", "info");
+      await log("trips", "Created new tab #" + tab.id + ", waiting for page to load…", "info");
+      await sleep(5000);
     } else {
       await log("trips", "Using existing Relay tab #" + tab.id);
       await log("trips", "Navigating to In-Transit page…", "info");
@@ -302,7 +302,7 @@ async function syncInTransitTrips() {
     }
 
     await log("trips", "Waiting for entitiesV2 API response from the page…", "info");
-    const data = await waitForEntitiesResponse(15000);
+    const data = await waitForEntitiesResponse(30000);
     const entities = extractEntries(data);
     await log("trips", "Captured " + entities.length + " trip entities from API response.", "success");
 

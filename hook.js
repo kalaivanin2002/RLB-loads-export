@@ -49,28 +49,33 @@
       } catch (e) {
         /* ignore */
       }
+
+      const url = typeof input === "string" ? input : (input && input.url ? input.url : "");
+      const isEntitiesCall = url && url.includes("/api/tours/entitiesV2");
+
       const promise = origFetch.apply(this, arguments);
 
       // Intercept entitiesV2 API responses
-      try {
-        const url = typeof input === "string" ? input : (input && input.url ? input.url : "");
-        if (url && url.includes("/api/tours/entitiesV2")) {
-          promise.then(function(response) {
-            if (response && response.ok) {
-              response.clone().json().then(function(data) {
-                window.postMessage({
-                  source: "RLB_ENTITIES",
-                  entities: data
-                }, "*");
-              }).catch(function() {});
+      if (isEntitiesCall) {
+        return promise.then(function(response) {
+          const cloned = response.clone();
+          cloned.json().then(function(data) {
+            try {
+              window.postMessage({
+                source: "RLB_ENTITIES",
+                entities: data
+              }, "*");
+            } catch (e) {
+              console.error("[RLB Hook] Failed to post entities message:", e);
             }
-            return response;
-          }).catch(function() {
-            return promise;
+          }).catch(function(err) {
+            console.error("[RLB Hook] Failed to parse entities response:", err);
           });
-        }
-      } catch (e) {
-        /* ignore */
+          return response;
+        }).catch(function(err) {
+          console.error("[RLB Hook] Fetch failed:", err);
+          throw err;
+        });
       }
 
       return promise;
