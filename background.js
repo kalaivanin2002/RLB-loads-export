@@ -212,6 +212,135 @@ async function harvest() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// SYNC IN-TRANSIT TRIPS — fetch trip entities from Relay API
+// ═════════════════════════════════════════════════════════════════════════════
+async function fetchTripsInPage(tabId, cfg, state) {
+  const url = cfg.relayBase.replace(/\/+$/, "") + "/api/tours/entitiesV2?tourState=IN_TRANSIT";
+  const r = await runInPage(tabId, url, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!r.ok) throw new Error("Relay HTTP " + r.status);
+  try {
+    return JSON.parse(r.body);
+  } catch (e) {
+    throw new Error("Relay response was not JSON");
+  }
+}
+
+function extractDriver(entity) {
+  if (!entity || !Array.isArray(entity.loads)) return null;
+  for (const load of entity.loads) {
+    if (load && load.driverList && Array.isArray(load.driverList)) {
+      for (const driver of load.driverList) {
+        if (driver) {
+          const firstName = driver.firstName || "";
+          const lastName = driver.lastName || "";
+          const fullName = (firstName + " " + lastName).trim() || "Unknown";
+          return {
+            driverName: fullName,
+            phoneNumber: driver.phoneNumber || null,
+            email: driver.email || null,
+          };
+        }
+      }
+    }
+    if (load && load.assignments && Array.isArray(load.assignments)) {
+      for (const assignment of load.assignments) {
+        if (assignment && assignment.driver) {
+          const d = assignment.driver;
+          return {
+            driverName: (d.firstName ? d.firstName : "") + (d.lastName ? " " + d.lastName : "") || "Unknown",
+            phoneNumber: d.phoneNumber || null,
+            email: d.email || null,
+          };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function extractFinalDropoffLocation(entity) {
+  if (!entity || !Array.isArray(entity.loads)) return null;
+  let lastDropoff = null;
+  let maxSeqNum = -1;
+
+  for (const load of entity.loads) {
+    if (!load || !Array.isArray(load.stops)) continue;
+    for (const stop of load.stops) {
+      if (stop && stop.stopType === "DROPOFF" && stop.stopSequenceNumber > maxSeqNum) {
+        lastDropoff = stop.location || stop.stopLocation;
+        maxSeqNum = stop.stopSequenceNumber;
+      }
+    }
+  }
+  return lastDropoff;
+}
+
+async function syncInTransitTrips() {
+  await resetLog("trips");
+  try {
+    const cfg = await getConfig();
+    const tab = await findRelayTab();
+    if (!tab) {
+      await log("trips", "No Amazon Relay tab found — open the Relay load board (and log in) first.", "error");
+      return;
+    }
+    await log("trips", "Using Relay tab #" + tab.id);
+
+    const data = await fetchTripsInPage(tab.id, cfg, {});
+    const entities = extractEntries(data);
+    await log("trips", "Fetched " + entities.length + " in-transit trip entities from Relay API.", "info");
+
+    const trips = [];
+    let errors = 0;
+
+    for (let i = 0; i < entities.length; i++) {
+      const entity = entities[i];
+      try {
+        const driver = extractDriver(entity);
+        const finalDropoff = extractFinalDropoffLocation(entity);
+
+        if (!driver) {
+          await log("trips", (i + 1) + "/" + entities.length + " " + (entity.id || "unknown") + ": No driver found — skipping.", "warn");
+          errors++;
+          continue;
+        }
+
+        if (!finalDropoff) {
+          await log("trips", (i + 1) + "/" + entities.length + " " + entity.id + ": No drop-off stop found — skipping.", "warn");
+          errors++;
+          continue;
+        }
+
+        const trip = {
+          tripId: entity.id,
+          tripStartTime: entity.startTime,
+          tripEndTime: entity.endTime,
+          tripState: entity.tourState,
+          driver: driver,
+          finalDropoffLocation: finalDropoff,
+        };
+
+        trips.push(trip);
+        await log("trips", (i + 1) + "/" + entities.length + " " + entity.id + ": OK", "success");
+      } catch (e) {
+        await log("trips", (i + 1) + "/" + entities.length + " " + (entity.id || "unknown") + ": " + (e.message || String(e)), "error");
+        errors++;
+      }
+    }
+
+    await chrome.storage.local.set({ tripsResults: trips });
+    await log("trips", "Done. Captured " + trips.length + " trip(s)" + (errors > 0 ? " with " + errors + " error(s)" : "") + ".", trips.length > 0 ? "success" : "warn");
+  } catch (e) {
+    await log("trips", "Error: " + (e.message || String(e)), "error");
+  } finally {
+    await setRunning("trips", false);
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // PHASE 2 — for each saved location, search Relay loads → ingest the response
 // ═════════════════════════════════════════════════════════════════════════════
 async function getLocations(cfg) {
@@ -823,6 +952,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       break;
     case "retry-failed-loads":
       retryFailed();
+      break;
+    case "start-sync-trips":
+      syncInTransitTrips();
       break;
     default:
       return;

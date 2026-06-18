@@ -82,13 +82,15 @@
       <div id="loadsLog" class="log" aria-live="polite"></div>
     </section>
 
-    <!-- ── Existing load search ──────────────────────────────────────────── -->
+    <!-- ── Sync In-Transit Trips ─────────────────────────────────────────── -->
     <section class="card">
-      <div class="card-head"><span class="card-title">Load Search</span></div>
-      <div id="driverList" class="driver-list"></div>
-      <button id="searchLoadsBtn" class="btn-primary">Search Loads</button>
-      <p id="status" class="status"></p>
+      <div class="card-head"><span class="card-title">In-Transit Trips</span></div>
+      <div id="tripsProgress" class="hint">Idle.</div>
+      <button id="syncTripsBtn" class="btn-primary" type="button">Sync In-Transit Trips</button>
+      <button id="downloadTripsBtn" class="btn-secondary" type="button" disabled>Download trips (JSON)</button>
+      <div id="tripsLog" class="log" aria-live="polite"></div>
     </section>
+
   </div>
 
   <script src="popup.js"></script>
