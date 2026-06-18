@@ -167,6 +167,48 @@ async function fetchLoadsViaApi(relayBase, dropOff) {
       if (typeof value === "string" && value.trim()) return value.trim();
     }
 
+    const storageKeys = [
+      "csrf-token",
+      "csrfToken",
+      "_csrf",
+      "x-csrf-token",
+      "X-CSRF-Token",
+      "XSRF-TOKEN",
+    ];
+    for (const store of [window.sessionStorage, window.localStorage]) {
+      try {
+        for (const key of storageKeys) {
+          const value = store.getItem(key);
+          if (typeof value === "string" && value.trim()) return value.trim();
+        }
+
+        for (let i = 0; i < store.length; i += 1) {
+          const key = store.key(i);
+          if (!key || !/csrf|xsrf/i.test(key)) continue;
+          const value = store.getItem(key);
+          if (typeof value === "string" && value.trim()) return value.trim();
+        }
+      } catch (error) {
+        // Ignore storage access issues.
+      }
+    }
+
+    try {
+      const html = document.documentElement?.outerHTML || "";
+      const patterns = [
+        /x-csrf-token["'\s:=>]+([A-Za-z0-9+/=:_-]{20,})/i,
+        /csrf-token["'\s:=>]+([A-Za-z0-9+/=:_-]{20,})/i,
+        /csrfToken["'\s:=>]+([A-Za-z0-9+/=:_-]{20,})/i,
+        /_csrf["'\s:=>]+([A-Za-z0-9+/=:_-]{20,})/i,
+      ];
+      for (const pattern of patterns) {
+        const match = html.match(pattern);
+        if (match?.[1]) return match[1].trim();
+      }
+    } catch (error) {
+      // Ignore HTML parsing issues.
+    }
+
     return "";
   };
 
@@ -178,8 +220,6 @@ async function fetchLoadsViaApi(relayBase, dropOff) {
     };
     if (csrfToken) {
       baseHeaders["X-CSRF-Token"] = csrfToken;
-      baseHeaders["csrf-token"] = csrfToken;
-      baseHeaders["X-XSRF-TOKEN"] = csrfToken;
     }
 
     const response = await fetch(url, Object.assign({
@@ -471,7 +511,7 @@ async function fetchLoadsViaApi(relayBase, dropOff) {
       throw new Error("No Relay city match found for " + (dropOff?.name || "selected location") + ".");
     }
     if (!csrfToken) {
-      throw new Error("No CSRF token found on the Relay page. Open the load board search page fully, then try again.");
+      throw new Error("No x-csrf-token found on the Relay page. Run one manual Relay search in that tab, then try again.");
     }
 
     const payload = {
