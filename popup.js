@@ -50,7 +50,7 @@ btn.addEventListener("click", async () => {
   if (!selected) { setStatus("Please select a driver.", "error"); return; }
 
   const driver = driversWithTrips[parseInt(selected.value)];
-  const dropOff = driver.tripDetails.dropOffLocation.name;
+  const dropOff = driver.tripDetails.dropOffLocation;
   const loadBoardUrl = "https://relay.amazon.co.uk/loadboard/search";
 
   btn.disabled = true;
@@ -61,7 +61,6 @@ btn.addEventListener("click", async () => {
 
     if (existingTab) {
       await chrome.tabs.update(existingTab.id, { active: true });
-      await runInject(existingTab.id, dropOff);
       await exportLoads(existingTab.id, dropOff);
     } else {
       const newTab = await chrome.tabs.create({ url: loadBoardUrl, active: true });
@@ -73,7 +72,6 @@ btn.addEventListener("click", async () => {
           }
         });
       });
-      await runInject(newTab.id, dropOff);
       await exportLoads(newTab.id, dropOff);
     }
   } catch (err) {
@@ -83,221 +81,433 @@ btn.addEventListener("click", async () => {
   }
 });
 
-async function runInject(tabId, dropOff) {
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    func: pageInject,
-    args: [dropOff],
-  });
-}
-
 async function exportLoads(tabId, dropOff) {
-  // Wait for search results to render after pageInject clicks "Search loads"
-  setStatus("Waiting for results...", "");
-  await new Promise((r) => setTimeout(r, 5000));
+  setStatus("Resolving city from Relay...", "");
 
   const results = await chrome.scripting.executeScript({
     target: { tabId },
-    func: scrapeLoads,
+    func: fetchLoadsViaApi,
+    args: ["https://relay.amazon.co.uk", dropOff],
+    world: "MAIN",
   });
 
-  const loads = results?.[0]?.result;
-  if (!loads || loads.length === 0) {
-    setStatus("No loads found.", "error");
-    return;
+  const apiResult = results?.[0]?.result;
+  if (!apiResult?.ok) {
+    throw new Error(apiResult?.error || "Relay API request failed.");
   }
 
-  const headers = [
-    "Load ID", "Deadhead (mi)",
-    "Pickup Location", "Pickup Time",
-    "Dropoff Location", "Dropoff Time",
-    "Trip Distance (mi)", "Duration",
-    "Equipment", "Trailer Type", "Loading Type",
-    "Total Payout (£)", "Rate (£/mi)",
-  ];
-  const rows = loads.map((l) => [
-    l.loadId, l.deadhead,
-    l.pickupLocation, l.pickupTime,
-    l.dropoffLocation, l.dropoffTime,
-    l.tripDistance, l.duration,
-    l.equipment, l.trailerType, l.loadingType,
-    l.totalPayout, l.ratePerMile,
-  ]);
+  const rawResponse = apiResult.rawResponse;
+  if (!rawResponse) {
+    throw new Error("Relay API response body was empty.");
+  }
 
-  const csv = [headers, ...rows]
-    .map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(","))
-    .join("\r\n");
-
-  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const json = JSON.stringify(rawResponse, null, 2);
+  const blob = new Blob([json], { type: "application/json;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `loads_${dropOff.replace(/[^a-z0-9]/gi, "_")}_${new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-")}.csv`;
+  a.download = `loads_${(dropOff?.name || "search").replace(/[^a-z0-9]/gi, "_")}_${new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-")}.json`;
   a.click();
   URL.revokeObjectURL(url);
 
-  setStatus(`Done — exported ${loads.length} load(s).`, "success");
+  setStatus("Done — exported Relay search response JSON.", "success");
 }
 
 // ─── Runs inside the page ─────────────────────────────────────────────────────
-function pageInject(dropOffName) {
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+async function fetchLoadsViaApi(relayBase, dropOff) {
+  const base = String(relayBase || "https://relay.amazon.co.uk").replace(/\/+$/, "");
 
-  function typeInto(input, value) {
-    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-    nativeSetter.call(input, value);
-    ["focus", "input", "change"].forEach((name) =>
-      input.dispatchEvent(new Event(name, { bubbles: true }))
-    );
-    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true }));
-    input.dispatchEvent(new KeyboardEvent("keyup",   { bubbles: true, cancelable: true }));
-  }
+  const fetchJson = async (url, options) => {
+    const response = await fetch(url, Object.assign({
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+      },
+    }, options || {}));
 
-  async function setDestination() {
-    const input = document.querySelector('#rlb-origin-city-filter input[role="combobox"]') ||
-                  document.querySelector('input[placeholder="Start typing to search"]');
-    if (!input) { console.error("[RLB] origin input not found"); return; }
-
-    const wrapper = document.querySelector("#rlb-origin-city-filter");
-    if (wrapper) wrapper.click();
-    await wait(200);
-
-    input.focus();
-    await wait(150);
-    typeInto(input, "");
-    await wait(100);
-    typeInto(input, dropOffName);
-    await wait(1800);
-
-    const listboxId = input.getAttribute("aria-controls");
-    const listbox = listboxId
-      ? document.getElementById(listboxId)
-      : document.querySelector('[role="listbox"]');
-
-    if (!listbox) { console.warn("[RLB] origin listbox not found"); return; }
-
-    const options = [...listbox.querySelectorAll('[role="option"]')];
-    const match = options.find(
-      (o) => o.textContent.trim().toLowerCase().includes(dropOffName.toLowerCase().split(",")[0])
-    ) || options[0];
-
-    if (match) {
-      match.click();
-      await wait(600);
-      // Click outside to confirm the selection and close the dropdown
-      document.body.click();
-      await wait(300);
-      input.dispatchEvent(new Event("blur", { bubbles: true }));
-      await wait(400);
-    } else {
-      console.warn("[RLB] no suggestion matched:", dropOffName);
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error("Relay HTTP " + response.status + ": " + text.slice(0, 300));
     }
-  }
 
-  async function setEquipment() {
-    // Close any open dropdown (origin listbox) with Escape then a body click
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await wait(300);
-    document.body.click();
-    await wait(600);
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      throw new Error("Relay response was not JSON.");
+    }
+  };
 
-    const equipInput =
-      document.querySelector('input[aria-label="Equipment*"]') ||
-      document.querySelector('#equipment-trailer-filter input');
-
-    if (!equipInput) { console.error("[RLB] equipment input not found"); return; }
-
-    // Open the equipment dropdown
-    equipInput.focus();
-    await wait(200);
-    equipInput.click();
-    await wait(1200);
-
-    // The dropdown div is always in DOM with id="equipment-type-filter-dropdown"
-    const dropdown = document.querySelector("#equipment-type-filter-dropdown");
-    if (!dropdown) { console.error("[RLB] equipment dropdown not found"); return; }
-
-    // The checkboxes are custom React divs with role="checkbox" and id="REQUIRED"/"PROVIDED"/"OTHER"
-    // "Tractor and trailer" maps to id="REQUIRED"
-    const checkbox = dropdown.querySelector('[role="checkbox"][id="REQUIRED"]');
-
-    if (checkbox) {
-      checkbox.click();
-      await wait(500);
-    } else {
-      // Fallback: find by searching for a region containing "tractor and trailer" text
-      // and click the [role="checkbox"] inside it
-      const regions = [...dropdown.querySelectorAll('[role="region"]')];
-      const tractorRegion = regions.find((r) =>
-        r.textContent.trim().toLowerCase().includes("tractor and trailer")
+  const textValue = (value) => {
+    if (value === null || value === undefined) return "";
+    if (typeof value === "string") return value.trim();
+    if (typeof value === "number") return String(value);
+    if (typeof value === "object") {
+      return textValue(
+        value.displayValue || value.name || value.label || value.value || value.text || value.amount
       );
-      const fallbackCheckbox = tractorRegion?.querySelector('[role="checkbox"]');
-      if (fallbackCheckbox) {
-        fallbackCheckbox.click();
-        await wait(500);
+    }
+    return String(value).trim();
+  };
+
+  const numberValue = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const parsed = Number(value.replace(/[^0-9.-]/g, ""));
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    if (typeof value === "object") {
+      return numberValue(value.value ?? value.amount ?? value.distance ?? value.miles);
+    }
+    return null;
+  };
+
+  const pick = (obj, names) => {
+    if (!obj || typeof obj !== "object") return null;
+    for (const name of names) {
+      if (obj[name] !== undefined && obj[name] !== null) return obj[name];
+    }
+    return null;
+  };
+
+  const normalizeCity = (entry) => {
+    if (!entry || typeof entry !== "object") return null;
+
+    const latitude = numberValue(pick(entry, ["latitude", "lat", "latitudeValue"]));
+    const longitude = numberValue(pick(entry, ["longitude", "lng", "lon", "longitudeValue"]));
+    const name = textValue(pick(entry, ["name", "city", "cityName", "label", "displayName"]));
+
+    if (!name || latitude === null || longitude === null) return null;
+
+    const displayValue =
+      textValue(pick(entry, ["displayValue", "label", "displayName"])) ||
+      name;
+
+    const stateCode = textValue(pick(entry, ["stateCode", "stateProvinceCode", "state", "region"])) || null;
+    const country = textValue(pick(entry, ["country", "countryCode", "countryName"])) || null;
+
+    return {
+      name: name,
+      stateCode: stateCode,
+      country: country,
+      latitude: latitude,
+      longitude: longitude,
+      displayValue: displayValue,
+      isCityLive: Boolean(pick(entry, ["isCityLive"])),
+      isAnywhere: Boolean(pick(entry, ["isAnywhere"])),
+      uniqueKey: textValue(pick(entry, ["uniqueKey"])) || String(latitude) + displayValue,
+    };
+  };
+
+  const extractCityEntries = (data) => {
+    if (Array.isArray(data)) return data;
+    if (!data || typeof data !== "object") return [];
+
+    const keys = ["cities", "results", "data", "suggestions", "items", "locations"];
+    for (const key of keys) {
+      if (Array.isArray(data[key])) return data[key];
+    }
+
+    return [];
+  };
+
+  const normalizeName = (value) =>
+    textValue(value)
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .replace(/,+/g, ",")
+      .trim();
+
+  const cityMatches = (city, targetName) => {
+    const target = normalizeName(targetName);
+    const variants = [
+      city.name,
+      city.displayValue,
+      [city.name, city.stateCode].filter(Boolean).join(", "),
+      [city.name, city.country].filter(Boolean).join(", "),
+    ].map(normalizeName).filter(Boolean);
+
+    return variants.some((variant) =>
+      variant === target ||
+      variant.startsWith(target) ||
+      target.startsWith(variant)
+    );
+  };
+
+  const pickBestCity = (cities, targetName, fallbackLocation) => {
+    const normalizedCities = cities.map(normalizeCity).filter(Boolean);
+    const exact = normalizedCities.find((city) => cityMatches(city, targetName));
+    if (exact) return exact;
+    if (normalizedCities.length > 0) return normalizedCities[0];
+
+    const fallbackLatitude = numberValue(fallbackLocation?.latitude);
+    const fallbackLongitude = numberValue(fallbackLocation?.longitude);
+    const fallbackName = textValue(fallbackLocation?.name || targetName);
+    if (!fallbackName || fallbackLatitude === null || fallbackLongitude === null) return null;
+
+    return {
+      name: fallbackName.split(",")[0].trim(),
+      stateCode: "UK",
+      country: "EU",
+      latitude: fallbackLatitude,
+      longitude: fallbackLongitude,
+      displayValue: fallbackName,
+      isCityLive: false,
+      isAnywhere: false,
+      uniqueKey: String(fallbackLatitude) + fallbackName,
+    };
+  };
+
+  const formatMoney = (value) => {
+    const amount = numberValue(value);
+    return amount === null ? "" : amount.toFixed(2);
+  };
+
+  const formatDistance = (value) => {
+    const distance = numberValue(value);
+    return distance === null ? "" : String(distance);
+  };
+
+  const formatDuration = (value) => {
+    if (value === null || value === undefined || value === "") return "";
+    if (typeof value === "string") return value.trim();
+
+    const millis = numberValue(
+      typeof value === "object"
+        ? (value.durationInMillis ?? value.millis ?? value.value)
+        : value
+    );
+    if (millis === null) return textValue(value);
+
+    const totalMinutes = Math.round(millis / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours && minutes) return hours + "h " + minutes + "m";
+    if (hours) return hours + "h";
+    return minutes + "m";
+  };
+
+  const formatStopTime = (stop) => {
+    if (!stop || typeof stop !== "object") return "";
+    return textValue(
+      pick(stop, [
+        "displayTime",
+        "timeRangeDisplayValue",
+        "appointmentTimeDisplayValue",
+        "localTimeWindowDisplayValue",
+        "timeDisplayValue",
+        "appointmentTime",
+        "windowStartTime",
+        "arrivalTime",
+      ])
+    );
+  };
+
+  const formatLocation = (location) => {
+    if (!location || typeof location !== "object") return "";
+    return textValue(
+      pick(location, [
+        "displayValue",
+        "cityDisplayValue",
+        "label",
+        "name",
+        "cityName",
+      ])
+    );
+  };
+
+  const findArrayByKeys = (root, keys) => {
+    const seen = new Set();
+    const stack = [root];
+
+    while (stack.length) {
+      const value = stack.pop();
+      if (!value || typeof value !== "object" || seen.has(value)) continue;
+      seen.add(value);
+
+      if (Array.isArray(value) && value.length > 0) {
+        const hasKey = value.some((item) =>
+          item && typeof item === "object" && keys.some((key) => key in item)
+        );
+        if (hasKey) return value;
+      }
+
+      if (Array.isArray(value)) {
+        for (const item of value) stack.push(item);
       } else {
-        console.warn("[RLB] Tractor and trailer checkbox not found");
+        for (const child of Object.values(value)) stack.push(child);
       }
     }
 
-    // Close the equipment dropdown by clicking outside
-    await wait(200);
-    document.body.click();
-    await wait(300);
-  }
+    return [];
+  };
 
-  async function clickSearchLoads() {
-    const btn = [...document.querySelectorAll('button[type="button"]')].find(
-      (b) => b.textContent.trim().toLowerCase() === "search loads"
+  const extractLoadEntries = (data) =>
+    findArrayByKeys(data, [
+      "workOpportunityId",
+      "loadId",
+      "loadNumber",
+      "stops",
+      "tripStops",
+      "pickupStop",
+      "dropoffStop",
+    ]);
+
+  const normalizeLoad = (item) => {
+    if (!item || typeof item !== "object") return null;
+
+    const stops = pick(item, ["stops", "tripStops", "stopDetails"]) || [];
+    const pickupStop =
+      pick(item, ["pickupStop", "originStop"]) ||
+      (Array.isArray(stops) ? stops[0] : null);
+    const dropoffStop =
+      pick(item, ["dropoffStop", "destinationStop"]) ||
+      (Array.isArray(stops) && stops.length ? stops[stops.length - 1] : null);
+    const pickupLocationObj = pick(pickupStop, ["location", "city"]) || pickupStop;
+    const dropoffLocationObj = pick(dropoffStop, ["location", "city"]) || dropoffStop;
+
+    const loadId = textValue(
+      pick(item, ["loadId", "workOpportunityId", "loadNumber", "id"])
     );
-    if (!btn) { console.error("[RLB] Search loads button not found"); return; }
-    btn.click();
-    await wait(300);
-  }
+    if (!loadId) return null;
 
-  (async () => {
-    await wait(800);
-    await setDestination();
-    await wait(1200);
-    await setEquipment();
-    await wait(800);
-    await clickSearchLoads();
-  })();
-}
-
-// ─── Runs inside the page ─────────────────────────────────────────────────────
-function scrapeLoads() {
-  const cards = [...document.querySelectorAll(".load-card > div")];
-
-  return cards.map((card) => {
-    const text = (el) => el?.textContent?.trim() ?? "";
-
-    const loadId = card.id ?? "";
-    const deadhead = text(card.querySelector(".css-8a5j1c .css-1maqsxd"));
-
-    const stopDetails = [...card.querySelectorAll(".css-soq2b7 > div")].filter(
-      (d) => d.querySelector("span[tabindex]")
+    const tripDistanceNumber = numberValue(
+      pick(item, ["tripDistance", "distance", "loadedDistance", "distanceInMiles"])
     );
+    const totalPayoutNumber = numberValue(
+      pick(item, ["totalPayout", "payout", "price", "totalAmount"])
+    );
+    const rateNumber =
+      numberValue(pick(item, ["ratePerMile", "ratePerDistance", "pricePerDistance"])) ||
+      (tripDistanceNumber && totalPayoutNumber
+        ? totalPayoutNumber / tripDistanceNumber
+        : null);
 
-    const pickupLocation  = text(stopDetails[0]?.querySelector(".wo-card-header__components"));
-    const pickupTime      = text(stopDetails[0]?.querySelectorAll(".wo-card-header__components")?.[1]);
-    const dropoffLocation = text(stopDetails[1]?.querySelector(".wo-card-header__components"));
-    const dropoffTime     = text(stopDetails[1]?.querySelectorAll(".wo-card-header__components")?.[1]);
+    return {
+      loadId: loadId,
+      deadhead: formatDistance(pick(item, ["deadhead", "deadheadDistance", "deadheadDistanceInMiles"])),
+      pickupLocation: formatLocation(pickupLocationObj),
+      pickupTime: formatStopTime(pickupStop),
+      dropoffLocation: formatLocation(dropoffLocationObj),
+      dropoffTime: formatStopTime(dropoffStop),
+      tripDistance: formatDistance(tripDistanceNumber),
+      duration: formatDuration(pick(item, ["duration", "durationInMillis", "tripDuration"])),
+      equipment: textValue(pick(item, ["equipment", "equipmentType", "equipmentCategory"])),
+      trailerType: textValue(pick(item, ["trailerType", "trailerTypeDisplayValue", "trailerRequirement"])),
+      loadingType: textValue(pick(item, ["loadingType", "loadingTypeDisplayValue", "loadingCategory"])),
+      totalPayout: formatMoney(totalPayoutNumber),
+      ratePerMile: rateNumber === null ? "" : rateNumber.toFixed(2),
+    };
+  };
 
-    const tripBlock    = [...card.querySelectorAll(".css-8a5j1c")][1];
-    const tripDistance = text(tripBlock?.querySelector(".css-1xm8gt .wo-card-header__components"));
-    const duration     = text(tripBlock?.querySelector(".css-fnc3ff .wo-card-header__components"));
+  try {
+    const cityResponse = await fetchJson(
+      base + "/api/loadboard/filters/cities/search/" + encodeURIComponent(dropOff?.name || "")
+    );
+    const city = pickBestCity(extractCityEntries(cityResponse), dropOff?.name || "", dropOff);
+    if (!city) {
+      throw new Error("No Relay city match found for " + (dropOff?.name || "selected location") + ".");
+    }
 
-    const equipment   = text(card.querySelector(".equipment-type-text span"));
-    const trailerType = text(card.querySelector(".trailer-type-circle p"));
-    const loadingType = card.querySelector(".loading-type")?.getAttribute("title")
-                      ?? text(card.querySelector(".loading-type"));
+    const payload = {
+      workOpportunityTypeList: ["ROUND_TRIP", "ONE_WAY"],
+      originCity: null,
+      liveCity: null,
+      originCities: [city],
+      startCityName: null,
+      startCityStateCode: null,
+      startCityLatitude: null,
+      startCityLongitude: null,
+      startCityDisplayValue: null,
+      isOriginCityLive: null,
+      startCityRadius: 50,
+      destinationCity: null,
+      originCitiesRadiusFilters: [
+        {
+          cityLatitude: city.latitude,
+          cityLongitude: city.longitude,
+          cityName: city.name,
+          cityStateCode: city.stateCode,
+          cityDisplayValue: city.displayValue,
+          radius: 50,
+        },
+      ],
+      destinationCitiesRadiusFilters: null,
+      exclusionCitiesFilter: null,
+      endCityName: null,
+      endCityStateCode: null,
+      endCityDisplayValue: null,
+      endCityLatitude: null,
+      endCityLongitude: null,
+      isDestinationCityLive: null,
+      endCityRadius: null,
+      startDate: null,
+      endDate: null,
+      minDistance: null,
+      maxDistance: null,
+      minimumDurationInMillis: null,
+      maximumDurationInMillis: null,
+      minPayout: null,
+      minPricePerDistance: null,
+      driverTypeFilters: [],
+      uiiaCertificationsFilter: [],
+      workOpportunityOperatingRegionFilter: [],
+      loadingTypeFilters: [],
+      maximumNumberOfStops: null,
+      workOpportunityAccessType: null,
+      sortByField: "relevanceForSearchTab",
+      sortOrder: "asc",
+      visibilityStatusType: "VISIBLE",
+      categorizedEquipmentTypeList: [
+        {
+          equipmentCategory: "REQUIRED",
+          equipmentsList: null,
+        },
+      ],
+      categorizedEquipmentTypeListForFilterPills: [
+        {
+          equipmentCategory: "REQUIRED",
+          equipmentsList: null,
+        },
+      ],
+      eligibleFeaturesExclusionFilter: ["UNANCHORED_NEGO"],
+      nextItemToken: 0,
+      resultSize: 50,
+      searchURL: "",
+      isAutoRefreshCall: false,
+      notificationId: "",
+      auditContextMap: JSON.stringify({
+        rlbChannel: "EXACT_MATCH",
+        isOriginCityLive: String(city.isCityLive),
+        isDestinationCityLive: "false",
+        userAgent: navigator.userAgent,
+        source: "AVAILABLE_WORK",
+      }),
+    };
 
-    const totalPayout = text(card.querySelector(".wo-total_payout"));
-    const ratePerMile = text(card.querySelector('[class*="n4zms0"] .wo-card-header__components'));
+    const searchResponse = await fetchJson(base + "/api/loadboard/search", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
 
-    return { loadId, deadhead, pickupLocation, pickupTime, dropoffLocation, dropoffTime, tripDistance, duration, equipment, trailerType, loadingType, totalPayout, ratePerMile };
-  }).filter((l) => l.loadId);
+    const loads = extractLoadEntries(searchResponse).map(normalizeLoad).filter(Boolean);
+    return {
+      ok: true,
+      city: city,
+      rawResponse: searchResponse,
+      loads: loads,
+      total: loads.length,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error && error.message ? error.message : String(error),
+    };
+  }
 }
 
 function setStatus(msg, type) {
