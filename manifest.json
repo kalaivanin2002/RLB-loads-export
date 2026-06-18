@@ -7,7 +7,7 @@
     "default_popup": "popup.html",
     "default_title": "RLB Load Search"
   },
-  "permissions": ["scripting", "tabs", "storage"],
+  "permissions": ["scripting", "tabs", "storage", "unlimitedStorage"],
   "host_permissions": [
     "https://relay.amazon.co.uk/*",
     "https://relay.amazon.com/*",

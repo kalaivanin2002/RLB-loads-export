@@ -18,8 +18,12 @@
 
       <div id="settings" class="settings hidden">
         <label class="field">
-          <span>OnTrack API URL</span>
+          <span>Locations API URL (GET/POST)</span>
           <input id="ontrackUrl" type="text" placeholder="https://ontrack-api.agilecyber.com/api/v1/rlb-locations" />
+        </label>
+        <label class="field">
+          <span>Loads ingest URL (POST, optional)</span>
+          <input id="ingestUrl" type="text" placeholder="optional — leave empty to download only" />
         </label>
         <label class="field">
           <span>Bearer token</span>
@@ -43,11 +47,33 @@
             <input id="delayMs" type="number" min="0" step="50" />
           </label>
         </div>
+        <div class="field-row">
+          <label class="field">
+            <span>Search radius (mi)</span>
+            <input id="searchRadius" type="number" min="0" step="1" />
+          </label>
+          <label class="field">
+            <span>Result size</span>
+            <input id="resultSize" type="number" min="1" step="10" />
+          </label>
+          <label class="field">
+            <span>Max locations (0=all)</span>
+            <input id="maxLocations" type="number" min="0" step="1" />
+          </label>
+        </div>
         <button id="saveSettings" class="btn-secondary" type="button">Save settings</button>
       </div>
 
       <button id="syncBtn" class="btn-primary" type="button">Sync RLB Locations (a–z)</button>
       <div id="syncLog" class="log" aria-live="polite"></div>
+    </section>
+
+    <!-- ── Find Loads (Phase 2) ──────────────────────────────────────────── -->
+    <section class="card">
+      <div class="card-head"><span class="card-title">Find Loads</span></div>
+      <button id="findLoadsBtn" class="btn-primary" type="button">Find Loads (all locations)</button>
+      <button id="downloadLoadsBtn" class="btn-secondary" type="button" disabled>Download results (JSON)</button>
+      <div id="loadsLog" class="log" aria-live="polite"></div>
     </section>
 
     <!-- ── Existing load search ──────────────────────────────────────────── -->
