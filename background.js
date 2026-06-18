@@ -110,6 +110,11 @@ async function runDomInPage(tabId, func, args) {
 // plus All, clicks Search loads, then scrapes the rendered load cards.
 function pageSearchAndScrape(loc, cfg) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const trace = [];
+
+  function step(msg) {
+    trace.push({ ts: Date.now(), msg: msg });
+  }
 
   function typeInto(input, value) {
     const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
@@ -188,6 +193,7 @@ function pageSearchAndScrape(loc, cfg) {
     const originText =
       (loc && (loc.displayValue || loc.display_value || loc.name || loc.cityName)) ||
       "";
+    step("Origin target: " + originText);
     const input =
       document.querySelector("#rlb-origin-city-filter input[role='combobox']") ||
       document.querySelector("#rlb-origin-city-filter input") ||
@@ -221,6 +227,7 @@ function pageSearchAndScrape(loc, cfg) {
       options[0];
 
     if (!match) throw new Error("no origin suggestion found");
+    step("Origin suggestion selected: " + ((match.textContent || "").trim() || "(empty)"));
     match.click();
     await wait(600);
     document.body.click();
@@ -230,6 +237,7 @@ function pageSearchAndScrape(loc, cfg) {
   }
 
   async function setEquipment() {
+    step("Opening equipment selector");
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await wait(300);
     document.body.click();
@@ -252,6 +260,7 @@ function pageSearchAndScrape(loc, cfg) {
       document.body;
     const tractorClicked = clickText(dropdown, "Tractor and trailer");
     if (!tractorClicked) throw new Error("tractor and trailer option not found");
+    step("Equipment selected: Tractor and trailer");
     await wait(500);
 
     const allClicked = clickText(dropdown, "All");
@@ -262,6 +271,7 @@ function pageSearchAndScrape(loc, cfg) {
       );
       if (allNode) allNode.click();
     }
+    step("Equipment selected: All");
     await wait(500);
 
     document.body.click();
@@ -269,6 +279,7 @@ function pageSearchAndScrape(loc, cfg) {
   }
 
   async function clickSearchLoads() {
+    step("Waiting for Search loads button");
     let btn = null;
     for (let i = 0; i < 20; i++) {
       btn = [...document.querySelectorAll('button[type="button"]')].find(
@@ -279,17 +290,23 @@ function pageSearchAndScrape(loc, cfg) {
     }
     if (!btn) throw new Error("Search loads button not found");
     if (btn.disabled) throw new Error("Search loads button stayed disabled");
+    step("Clicking Search loads");
     btn.click();
     await wait(300);
   }
 
   async function waitForLoads() {
+    step("Waiting for rendered load cards");
     const timeoutAt = Date.now() + 15000;
     while (Date.now() < timeoutAt) {
       const loads = scrapeLoads();
-      if (loads.length) return loads;
+      if (loads.length) {
+        step("Loaded " + loads.length + " card(s)");
+        return loads;
+      }
       await wait(500);
     }
+    step("Timed out waiting for load cards");
     return scrapeLoads();
   }
 
@@ -304,6 +321,7 @@ function pageSearchAndScrape(loc, cfg) {
     return {
       loads: loads,
       workOpportunities: loads,
+      trace: trace,
       search: {
         origin: (loc && (loc.displayValue || loc.display_value || loc.name || loc.cityName)) || "",
         equipment: ["Tractor and trailer", "All"],
@@ -526,8 +544,13 @@ async function findLoads() {
       const loc = toSearch[i];
       const label = loc.displayValue || loc.name || "#" + i;
       try {
+        await log("loads", label + ": starting DOM search");
         const data = await runDomInPage(tab.id, pageSearchAndScrape, [loc, cfg]);
         const n = countWorkOpportunities(data);
+        const trace = data && Array.isArray(data.trace) ? data.trace : [];
+        for (const entry of trace) {
+          await log("loads", label + " | " + entry.msg);
+        }
 
         results.push({ location: loc, capturedAt: new Date().toISOString(), count: n, response: data });
         await chrome.storage.local.set({ loadsResults: results });
@@ -540,7 +563,7 @@ async function findLoads() {
         totalOpps += n;
         await log("loads", label + ": " + n + " loads" + suffix, n > 0 ? "success" : "info");
       } catch (e) {
-        await log("loads", label + ": " + (e.message || String(e)), "error");
+        await log("loads", label + ": " + (e && e.message ? e.message : String(e)), "error");
       }
       await sleep(cfg.delayMs);
     }
