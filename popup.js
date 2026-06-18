@@ -338,7 +338,11 @@ function setStatus(msg, type) {
     sync: $("syncBtn"),
     syncLog: $("syncLog"),
     findLoads: $("findLoadsBtn"),
+    stopLoads: $("stopLoadsBtn"),
+    resumeLoads: $("resumeLoadsBtn"),
+    retryFailed: $("retryFailedBtn"),
     downloadLoads: $("downloadLoadsBtn"),
+    loadsProgress: $("loadsProgress"),
     loadsLog: $("loadsLog"),
   };
 
@@ -391,6 +395,20 @@ function setStatus(msg, type) {
 
   els.sync.addEventListener("click", () => start("harvest", "start-harvest"));
   els.findLoads.addEventListener("click", () => start("loads", "start-find-loads"));
+  els.stopLoads.addEventListener("click", () => send("stop-find-loads"));
+  els.resumeLoads.addEventListener("click", () => send("resume-find-loads"));
+  els.retryFailed.addEventListener("click", () => {
+    els.loadsLog.innerHTML = "";
+    send("retry-failed-loads");
+  });
+
+  function send(messageType) {
+    chrome.runtime.sendMessage({ type: messageType }, () => {
+      if (chrome.runtime.lastError) {
+        appendLog("loads", { msg: "Error: " + chrome.runtime.lastError.message, level: "error", ts: Date.now() });
+      }
+    });
+  }
 
   els.downloadLoads.addEventListener("click", () => {
     chrome.storage.local.get(["loadsResults"], (r) => {
@@ -439,26 +457,50 @@ function setStatus(msg, type) {
     j.btn.textContent = busy ? j.busy : j.idle;
   }
 
+  // Reflect the find-loads job state across its buttons + progress line.
+  function refreshLoadsUi() {
+    chrome.storage.local.get(["loadsJobState", "loadsRunning", "loadsFailed", "loadsResults"], (r) => {
+      const state = r.loadsJobState;
+      const running = r.loadsRunning === true;
+      const failedCount = (r.loadsFailed || []).length;
+      const resultsCount = (r.loadsResults || []).length;
+
+      els.findLoads.disabled = running;
+      els.findLoads.textContent = running ? "Finding loads…" : "Find Loads (all locations)";
+      els.stopLoads.disabled = !running;
+      const resumable = !running && state && state.status !== "done" && state.cursor < state.total;
+      els.resumeLoads.disabled = !resumable;
+      els.retryFailed.disabled = running || failedCount === 0;
+      els.retryFailed.textContent = failedCount ? "Retry failed (" + failedCount + ")" : "Retry failed";
+      els.downloadLoads.disabled = resultsCount === 0;
+
+      if (state && state.total) {
+        els.loadsProgress.textContent =
+          "Processed " + state.processed + "/" + state.total + " · " + state.errors + " errors · " +
+          state.status + (failedCount ? " · " + failedCount + " failed" : "");
+      } else {
+        els.loadsProgress.textContent = running ? "Starting…" : "Idle.";
+      }
+    });
+  }
+
   // Live updates while a job runs.
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg && msg.type === "progress" && JOBS[msg.job] && msg.entry) appendLog(msg.job, msg.entry);
   });
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.harvestRunning) setBusy("harvest", changes.harvestRunning.newValue === true);
-    if (changes.loadsRunning) setBusy("loads", changes.loadsRunning.newValue === true);
-    if (changes.loadsResults) {
-      const v = changes.loadsResults.newValue || [];
-      els.downloadLoads.disabled = v.length === 0;
+    if (changes.loadsRunning || changes.loadsJobState || changes.loadsFailed || changes.loadsResults) {
+      refreshLoadsUi();
     }
   });
 
   // On open, restore settings + each job's last run.
   loadSettings();
-  chrome.storage.local.get(["harvestLog", "harvestRunning", "loadsLog", "loadsRunning", "loadsResults"], (r) => {
+  chrome.storage.local.get(["harvestLog", "harvestRunning", "loadsLog"], (r) => {
     renderLog("harvest", r.harvestLog);
     renderLog("loads", r.loadsLog);
     if (r.harvestRunning) setBusy("harvest", true);
-    if (r.loadsRunning) setBusy("loads", true);
-    els.downloadLoads.disabled = !(r.loadsResults && r.loadsResults.length);
   });
+  refreshLoadsUi();
 })();

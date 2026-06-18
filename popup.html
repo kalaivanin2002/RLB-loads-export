@@ -56,11 +56,11 @@
             <span>Result size</span>
             <input id="resultSize" type="number" min="1" step="10" />
           </label>
-          <label class="field">
-            <span>Max locations (0=all)</span>
-            <input id="maxLocations" type="number" min="0" step="1" />
-          </label>
         </div>
+        <label class="field">
+          <span>Max locations to process (0 = all)</span>
+          <input id="maxLocations" type="number" min="0" step="1" />
+        </label>
         <button id="saveSettings" class="btn-secondary" type="button">Save settings</button>
       </div>
 
@@ -71,7 +71,13 @@
     <!-- ── Find Loads (Phase 2) ──────────────────────────────────────────── -->
     <section class="card">
       <div class="card-head"><span class="card-title">Find Loads</span></div>
+      <div id="loadsProgress" class="hint">Idle.</div>
       <button id="findLoadsBtn" class="btn-primary" type="button">Find Loads (all locations)</button>
+      <div class="field-row">
+        <button id="stopLoadsBtn" class="btn-secondary" type="button" disabled>Stop</button>
+        <button id="resumeLoadsBtn" class="btn-secondary" type="button" disabled>Resume</button>
+        <button id="retryFailedBtn" class="btn-secondary" type="button" disabled>Retry failed</button>
+      </div>
       <button id="downloadLoadsBtn" class="btn-secondary" type="button" disabled>Download results (JSON)</button>
       <div id="loadsLog" class="log" aria-live="polite"></div>
     </section>

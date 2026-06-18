@@ -430,6 +430,62 @@ function disableAutoRefreshInPage() {
   return { found: false, action: "not-found" };
 }
 
+// Fallback CSRF lookup: read the token straight from the page (meta tag,
+// global var, cookie, or inline script). Runs in the MAIN world.
+function extractCsrfFromPage() {
+  const out = { token: null, name: "anti-csrftoken-a2z", source: null };
+
+  try {
+    const metas = document.querySelectorAll("meta[name]");
+    for (const m of metas) {
+      const n = (m.getAttribute("name") || "").toLowerCase();
+      if (n.indexOf("csrf") !== -1 && m.getAttribute("content")) {
+        out.token = m.getAttribute("content");
+        out.name = m.getAttribute("name");
+        out.source = "meta:" + n;
+        return out;
+      }
+    }
+  } catch (e) {}
+
+  try {
+    const cands = ["csrfToken", "CSRF_TOKEN", "antiCsrfToken", "antiCsrftokenA2z", "__CSRF__"];
+    for (const k of cands) {
+      if (window[k] && typeof window[k] === "string") {
+        out.token = window[k];
+        out.source = "window." + k;
+        return out;
+      }
+    }
+  } catch (e) {}
+
+  try {
+    const m = document.cookie.match(/(?:^|;\s*)((?:anti-csrftoken[^=]*|csrf[^=]*))=([^;]+)/i);
+    if (m) {
+      out.token = decodeURIComponent(m[2]);
+      out.source = "cookie:" + m[1];
+      return out;
+    }
+  } catch (e) {}
+
+  try {
+    const scripts = document.querySelectorAll("script:not([src])");
+    for (const s of scripts) {
+      const t = s.textContent || "";
+      const mm =
+        t.match(/anti-csrftoken-a2z["'\s:=]+([A-Za-z0-9+/=_-]{16,})/i) ||
+        t.match(/csrf[_-]?token["'\s:=]+([A-Za-z0-9+/=_-]{16,})/i);
+      if (mm) {
+        out.token = mm[1];
+        out.source = "inline-script";
+        return out;
+      }
+    }
+  } catch (e) {}
+
+  return out;
+}
+
 async function disableAutoRefresh(tabId) {
   const res = await chrome.scripting.executeScript({
     target: { tabId: tabId },
@@ -438,121 +494,338 @@ async function disableAutoRefresh(tabId) {
   return (res && res[0] && res[0].result) || { found: false, action: "no-result" };
 }
 
-let isFindingLoads = false;
+// ── resilient job engine ─────────────────────────────────────────────────────
+// State is split so the hot path stays cheap:
+//   loadsJobLocations — the full list (written once per job)
+//   loadsJobState     — small mutable progress {status,cursor,total,processed,errors,csrf,relayTabId,updatedAt}
+//   loadsFailed       — failures, for a retry pass
+//   loadsResults      — full responses, only when no ingest URL (download/testing)
+const rand = (n) => Math.floor(Math.random() * n);
 
-async function findLoads() {
-  if (isFindingLoads) {
-    await log("loads", "Find loads already running.", "warn");
-    return;
-  }
-  isFindingLoads = true;
-  await resetLog("loads");
+let loopActive = false; // per-worker guard against concurrent loops
+let stopRequested = false;
+
+function ensureWatchdog() {
+  chrome.alarms.create("loadsWatchdog", { periodInMinutes: 1 });
+}
+
+async function resolveCsrf(tabId) {
+  const s = await chrome.storage.local.get(["csrfToken", "csrfHeaderName"]);
+  if (s.csrfToken) return { token: s.csrfToken, headerName: s.csrfHeaderName };
   try {
-    const cfg = await getConfig();
-    if (!cfg.token) {
-      await log("loads", "No token set — open Settings, paste the token, and Save.", "error");
-      return;
+    const res = await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: extractCsrfFromPage,
+      world: "MAIN",
+    });
+    const r = res && res[0] && res[0].result;
+    if (r && r.token) {
+      await chrome.storage.local.set({
+        csrfToken: r.token,
+        csrfHeaderName: r.name || "anti-csrftoken-a2z",
+        csrfCapturedAt: Date.now(),
+      });
+      await log("loads", "Found CSRF token in page (" + r.source + ").", "success");
+      return { token: r.token, headerName: r.name || "anti-csrftoken-a2z" };
     }
-    const tab = await findRelayTab();
-    if (!tab) {
-      await log("loads", "No Amazon Relay tab found — open the Relay load board (and log in) first.", "error");
-      return;
-    }
+  } catch (e) {
+    /* fall through */
+  }
+  return null;
+}
 
-    let locations;
+// Retry transient failures (429/5xx/network) with exponential backoff + jitter.
+async function withRetry(fn, kind, label, maxRetries) {
+  let attempt = 0;
+  while (true) {
     try {
-      locations = await getLocations(cfg);
+      return await fn();
     } catch (e) {
-      await log("loads", "Failed to fetch locations: " + (e.message || String(e)), "error");
-      return;
+      const msg = e && e.message ? e.message : String(e);
+      const transient =
+        /HTTP (0|408|429|500|502|503|504)\b/.test(msg) || /network|failed to fetch|no response/i.test(msg);
+      attempt++;
+      if (attempt > maxRetries || !transient) throw e;
+      const backoff = Math.min(10000, 400 * Math.pow(2, attempt)) + rand(400);
+      await log("loads", label + ": " + kind + " retry " + attempt + "/" + maxRetries + " in " + Math.round(backoff) + "ms (" + msg + ")", "warn");
+      await sleep(backoff);
     }
-    if (!locations.length) {
-      await log("loads", "No saved locations returned from the API.", "warn");
-      return;
-    }
-    const csrfStore = await chrome.storage.local.get(["csrfToken", "csrfHeaderName"]);
-    const csrf = csrfStore.csrfToken
-      ? { token: csrfStore.csrfToken, headerName: csrfStore.csrfHeaderName }
-      : null;
-    if (!csrf) {
-      await log(
-        "loads",
-        "No CSRF token captured yet. Keep the Relay load board tab open until it fully loads / auto-refreshes (or run one search manually), then retry.",
-        "error"
-      );
-      return;
-    }
-    await log("loads", "Using captured CSRF token (" + (csrf.headerName || "anti-csrftoken-a2z") + ").");
-
-    try {
-      const ar = await disableAutoRefresh(tab.id);
-      if (ar.found) {
-        await log("loads", "Auto-refresh: " + ar.action + ".", ar.action === "not-found" ? "warn" : "success");
-      } else {
-        await log("loads", "Auto-refresh toggle not found — continuing. (Send its HTML to target it exactly.)", "warn");
-      }
-    } catch (e) {
-      await log("loads", "Auto-refresh step failed: " + (e.message || String(e)) + " — continuing.", "warn");
-    }
-
-    const radius = Number(cfg.searchRadius) || 5;
-    const max = Number(cfg.maxLocations) || 0;
-    const toSearch = max > 0 ? locations.slice(0, max) : locations;
-    await log(
-      "loads",
-      "Fetched " + locations.length + " locations" +
-        (max > 0 ? " — testing first " + toSearch.length : "") +
-        ". Searching loads (radius " + radius + " mi)…"
-    );
-
-    const results = [];
-    await chrome.storage.local.set({ loadsResults: [] });
-    let totalOpps = 0;
-
-    for (let i = 0; i < toSearch.length; i++) {
-      const loc = toSearch[i];
-      const label = loc.displayValue || loc.name || "#" + i;
-      try {
-        const payload = buildSearchPayload(loc, cfg);
-        const data = await searchLoadsInPage(tab.id, cfg, payload, csrf);
-        const n = countWorkOpportunities(data);
-
-        results.push({ location: loc, capturedAt: new Date().toISOString(), count: n, response: data });
-        await chrome.storage.local.set({ loadsResults: results });
-
-        let suffix = " (stored)";
-        if (cfg.ingestUrl) {
-          await postIngest(cfg, data);
-          suffix = " → ingested + stored";
-        }
-        totalOpps += n;
-        await log("loads", label + ": " + n + " loads" + suffix, n > 0 ? "success" : "info");
-      } catch (e) {
-        await log("loads", label + ": " + (e.message || String(e)), "error");
-      }
-      await sleep(cfg.delayMs);
-    }
-    await log(
-      "loads",
-      "Done. " + results.length + " searches stored, " + totalOpps + " loads total. Use “Download results”.",
-      "success"
-    );
-  } finally {
-    isFindingLoads = false;
-    await setRunning("loads", false);
   }
 }
 
+async function appendResult(rec) {
+  const { loadsResults } = await chrome.storage.local.get(["loadsResults"]);
+  const arr = loadsResults || [];
+  arr.push(rec);
+  await chrome.storage.local.set({ loadsResults: arr });
+}
+
+async function recordFailure(index, label, location, error) {
+  const { loadsFailed } = await chrome.storage.local.get(["loadsFailed"]);
+  const arr = loadsFailed || [];
+  arr.push({ index: index, label: label, location: location, error: error });
+  await chrome.storage.local.set({ loadsFailed: arr });
+}
+
+// Set up tab/CSRF/auto-refresh, persist a fresh job, and kick the loop.
+async function startJob(locations) {
+  const cfg = await getConfig();
+  if (!cfg.token) {
+    await log("loads", "No token set — open Settings, paste the token, and Save.", "error");
+    return;
+  }
+  const tab = await findRelayTab();
+  if (!tab) {
+    await log("loads", "No Amazon Relay tab found — open the Relay load board (and log in) first.", "error");
+    return;
+  }
+  const csrf = await resolveCsrf(tab.id);
+  if (!csrf) {
+    await log("loads", "No CSRF token found. Reload the Relay load board TAB, run one manual search, then retry.", "error");
+    return;
+  }
+  await log("loads", "Using CSRF token (" + (csrf.headerName || "anti-csrftoken-a2z") + ").");
+
+  try {
+    const ar = await disableAutoRefresh(tab.id);
+    await log("loads", "Auto-refresh: " + (ar.found ? ar.action : "toggle not found — continuing") + ".", ar.found ? "success" : "warn");
+  } catch (e) {
+    await log("loads", "Auto-refresh step failed: " + (e.message || String(e)) + " — continuing.", "warn");
+  }
+
+  await chrome.storage.local.set({
+    loadsJobLocations: locations,
+    loadsJobState: {
+      status: "running",
+      cursor: 0,
+      total: locations.length,
+      processed: 0,
+      errors: 0,
+      csrf: csrf,
+      relayTabId: tab.id,
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+    },
+    loadsFailed: [],
+    loadsResults: [],
+  });
+  ensureWatchdog();
+  await setRunning("loads", true);
+  stopRequested = false;
+  await log("loads", "Queued " + locations.length + " locations. Pacing ~" + (Number(cfg.delayMs) || 300) + "ms + jitter.");
+  processLoop();
+}
+
+async function startFindLoads() {
+  if (loopActive) {
+    await log("loads", "A job is already running — Stop it first.", "warn");
+    return;
+  }
+  await resetLog("loads");
+  const cfg = await getConfig();
+  if (!cfg.token) {
+    await log("loads", "No token set — open Settings, paste the token, and Save.", "error");
+    return;
+  }
+  const tab = await findRelayTab();
+  if (!tab) {
+    await log("loads", "No Amazon Relay tab found — open the Relay load board (and log in) first.", "error");
+    return;
+  }
+  let locations;
+  try {
+    locations = await getLocations(cfg);
+  } catch (e) {
+    await log("loads", "Failed to fetch locations: " + (e.message || String(e)), "error");
+    return;
+  }
+  if (!locations.length) {
+    await log("loads", "No saved locations returned from the API.", "warn");
+    return;
+  }
+  const max = Number(cfg.maxLocations) || 0;
+  const toSearch = max > 0 ? locations.slice(0, max) : locations;
+  await log("loads", "Fetched " + locations.length + " locations" + (max > 0 ? " — using first " + toSearch.length : "") + ".");
+  await startJob(toSearch);
+}
+
+async function resumeFindLoads() {
+  const { loadsJobState: state } = await chrome.storage.local.get(["loadsJobState"]);
+  if (!state) {
+    await log("loads", "No job to resume.", "warn");
+    return;
+  }
+  if (state.status === "done" || state.cursor >= state.total) {
+    await log("loads", "Job already complete.", "info");
+    return;
+  }
+  if (loopActive && state.status === "running") {
+    await log("loads", "Already running.", "info");
+    return;
+  }
+  state.status = "running";
+  state.updatedAt = Date.now();
+  await chrome.storage.local.set({ loadsJobState: state });
+  ensureWatchdog();
+  await setRunning("loads", true);
+  stopRequested = false;
+  await log("loads", "Resuming from " + state.cursor + "/" + state.total + "…");
+  processLoop();
+}
+
+async function stopFindLoads() {
+  stopRequested = true;
+  const { loadsJobState: state } = await chrome.storage.local.get(["loadsJobState"]);
+  if (state && state.status === "running") {
+    state.status = "paused";
+    state.updatedAt = Date.now();
+    await chrome.storage.local.set({ loadsJobState: state });
+  }
+  if (!loopActive) {
+    await setRunning("loads", false);
+    await log("loads", "Stopped.", "warn");
+  } else {
+    await log("loads", "Stopping after current request…", "warn");
+  }
+}
+
+async function retryFailed() {
+  if (loopActive) {
+    await log("loads", "A job is running — Stop it before retrying failed.", "warn");
+    return;
+  }
+  const { loadsFailed } = await chrome.storage.local.get(["loadsFailed"]);
+  const failed = loadsFailed || [];
+  if (!failed.length) {
+    await log("loads", "No failed locations to retry.", "info");
+    return;
+  }
+  await resetLog("loads");
+  await log("loads", "Retrying " + failed.length + " failed locations…");
+  await startJob(failed.map((f) => f.location));
+}
+
+async function processLoop() {
+  if (loopActive) return;
+  loopActive = true;
+  try {
+    const cfg = await getConfig();
+    const base = Math.max(0, Number(cfg.delayMs) || 300);
+    const { loadsJobLocations: locations } = await chrome.storage.local.get(["loadsJobLocations"]);
+    if (!locations || !locations.length) return;
+
+    while (true) {
+      const { loadsJobState: state } = await chrome.storage.local.get(["loadsJobState"]);
+      if (!state || state.status !== "running") break;
+
+      if (stopRequested) {
+        state.status = "paused";
+        state.updatedAt = Date.now();
+        await chrome.storage.local.set({ loadsJobState: state });
+        await log("loads", "Paused at " + state.processed + "/" + state.total + ".", "warn");
+        await setRunning("loads", false);
+        break;
+      }
+
+      if (state.cursor >= state.total) {
+        state.status = "done";
+        state.updatedAt = Date.now();
+        await chrome.storage.local.set({ loadsJobState: state });
+        const { loadsFailed } = await chrome.storage.local.get(["loadsFailed"]);
+        const failN = (loadsFailed || []).length;
+        await log(
+          "loads",
+          "Done. " + state.processed + "/" + state.total + " processed, " + state.errors + " errors" +
+            (failN ? " — " + failN + " failed (use Retry failed)" : "") + ".",
+          "success"
+        );
+        await setRunning("loads", false);
+        chrome.alarms.clear("loadsWatchdog");
+        break;
+      }
+
+      const i = state.cursor;
+      const loc = locations[i];
+      const label = (loc && (loc.displayValue || loc.name)) || "#" + i;
+
+      try {
+        const payload = buildSearchPayload(loc, cfg);
+        const data = await withRetry(() => searchLoadsInPage(state.relayTabId, cfg, payload, state.csrf), "search", label, 3);
+        const n = countWorkOpportunities(data);
+
+        if (cfg.ingestUrl) {
+          await withRetry(() => postIngest(cfg, data), "ingest", label, 3);
+        } else {
+          await appendResult({ location: loc, capturedAt: new Date().toISOString(), count: n, response: data });
+        }
+
+        state.cursor = i + 1;
+        state.processed = state.processed + 1;
+        state.updatedAt = Date.now();
+        await chrome.storage.local.set({ loadsJobState: state });
+        await log("loads", i + 1 + "/" + state.total + " " + label + ": " + n + " loads" + (cfg.ingestUrl ? " → ingested" : " (stored)"), n > 0 ? "success" : "info");
+      } catch (e) {
+        await recordFailure(i, label, loc, e && e.message ? e.message : String(e));
+        state.cursor = i + 1;
+        state.processed = state.processed + 1;
+        state.errors = state.errors + 1;
+        state.updatedAt = Date.now();
+        await chrome.storage.local.set({ loadsJobState: state });
+        await log("loads", i + 1 + "/" + state.total + " " + label + ": ERROR " + (e.message || e), "error");
+      }
+
+      await sleep(base + rand(base)); // fast: base..2×base (jitter)
+    }
+  } finally {
+    loopActive = false;
+  }
+}
+
+// Auto-resume: if the worker was killed mid-run, restart the loop.
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== "loadsWatchdog") return;
+  if (loopActive) return;
+  const { loadsJobState: state } = await chrome.storage.local.get(["loadsJobState"]);
+  if (!state) return;
+  if (state.status === "running" && Date.now() - (state.updatedAt || 0) > 25000) {
+    await log("loads", "Resuming after worker restart…", "warn");
+    stopRequested = false;
+    processLoop();
+  } else if (state.status !== "running") {
+    chrome.alarms.clear("loadsWatchdog");
+  }
+});
+
+// Also resume immediately when the worker spins back up.
+(async function resumeOnStartup() {
+  const { loadsJobState: state } = await chrome.storage.local.get(["loadsJobState"]);
+  if (state && state.status === "running") {
+    ensureWatchdog();
+    processLoop();
+  }
+})();
+
 // ─────────────────────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg && msg.type === "start-harvest") {
-    harvest();
-    sendResponse({ ok: true });
-    return;
+  if (!msg) return;
+  switch (msg.type) {
+    case "start-harvest":
+      harvest();
+      break;
+    case "start-find-loads":
+      startFindLoads();
+      break;
+    case "stop-find-loads":
+      stopFindLoads();
+      break;
+    case "resume-find-loads":
+      resumeFindLoads();
+      break;
+    case "retry-failed-loads":
+      retryFailed();
+      break;
+    default:
+      return;
   }
-  if (msg && msg.type === "start-find-loads") {
-    findLoads();
-    sendResponse({ ok: true });
-    return;
-  }
+  sendResponse({ ok: true });
 });
