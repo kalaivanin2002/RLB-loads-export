@@ -212,20 +212,25 @@ async function harvest() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// SYNC IN-TRANSIT TRIPS — fetch trip entities from Relay API
+// SYNC IN-TRANSIT TRIPS — intercept entitiesV2 response from the page
 // ═════════════════════════════════════════════════════════════════════════════
-async function fetchTripsInPage(tabId, cfg, state) {
-  const url = cfg.relayBase.replace(/\/+$/, "") + "/api/tours/entitiesV2?tourState=IN_TRANSIT";
-  const r = await runInPage(tabId, url, {
-    credentials: "include",
-    headers: { Accept: "application/json" },
-  });
-  if (!r.ok) throw new Error("Relay HTTP " + r.status);
-  try {
-    return JSON.parse(r.body);
-  } catch (e) {
-    throw new Error("Relay response was not JSON");
+async function waitForEntitiesResponse(maxWaitMs = 15000) {
+  const startTime = Date.now();
+  while (Date.now() - startTime < maxWaitMs) {
+    const stored = await chrome.storage.local.get(["capturedEntitiesResponse"]);
+    if (stored.capturedEntitiesResponse) {
+      await chrome.storage.local.remove(["capturedEntitiesResponse", "capturedEntitiesAt"]);
+      return stored.capturedEntitiesResponse;
+    }
+    await sleep(500);
   }
+  throw new Error("Timed out waiting for entitiesV2 response from the page (waited " + maxWaitMs + "ms)");
+}
+
+async function navigateToInTransitPage(tabId, cfg) {
+  const inTransitUrl = cfg.relayBase.replace(/\/+$/, "") + "/tours/in-transit?ref=owp_nav_tours";
+  await chrome.tabs.update(tabId, { url: inTransitUrl });
+  await sleep(2000);
 }
 
 function extractDriver(entity) {
@@ -282,16 +287,24 @@ async function syncInTransitTrips() {
   await resetLog("trips");
   try {
     const cfg = await getConfig();
-    const tab = await findRelayTab();
-    if (!tab) {
-      await log("trips", "No Amazon Relay tab found — open the Relay load board (and log in) first.", "error");
-      return;
-    }
-    await log("trips", "Using Relay tab #" + tab.id);
+    let tab = await findRelayTab();
 
-    const data = await fetchTripsInPage(tab.id, cfg, {});
+    if (!tab) {
+      await log("trips", "No Amazon Relay tab found — creating one…", "info");
+      const inTransitUrl = cfg.relayBase.replace(/\/+$/, "") + "/tours/in-transit?ref=owp_nav_tours";
+      tab = await chrome.tabs.create({ url: inTransitUrl, active: true });
+      await sleep(3000);
+      await log("trips", "Created new tab #" + tab.id + " and navigating to In-Transit page…", "info");
+    } else {
+      await log("trips", "Using existing Relay tab #" + tab.id);
+      await log("trips", "Navigating to In-Transit page…", "info");
+      await navigateToInTransitPage(tab.id, cfg);
+    }
+
+    await log("trips", "Waiting for entitiesV2 API response from the page…", "info");
+    const data = await waitForEntitiesResponse(15000);
     const entities = extractEntries(data);
-    await log("trips", "Fetched " + entities.length + " in-transit trip entities from Relay API.", "info");
+    await log("trips", "Captured " + entities.length + " trip entities from API response.", "success");
 
     const trips = [];
     let errors = 0;

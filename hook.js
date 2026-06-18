@@ -49,7 +49,31 @@
       } catch (e) {
         /* ignore */
       }
-      return origFetch.apply(this, arguments);
+      const promise = origFetch.apply(this, arguments);
+
+      // Intercept entitiesV2 API responses
+      try {
+        const url = typeof input === "string" ? input : (input && input.url ? input.url : "");
+        if (url && url.includes("/api/tours/entitiesV2")) {
+          promise.then(function(response) {
+            if (response && response.ok) {
+              response.clone().json().then(function(data) {
+                window.postMessage({
+                  source: "RLB_ENTITIES",
+                  entities: data
+                }, "*");
+              }).catch(function() {});
+            }
+            return response;
+          }).catch(function() {
+            return promise;
+          });
+        }
+      } catch (e) {
+        /* ignore */
+      }
+
+      return promise;
     };
   }
 
