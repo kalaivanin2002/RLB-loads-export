@@ -83,11 +83,16 @@ btn.addEventListener("click", async () => {
 
 async function exportLoads(tabId, dropOff) {
   setStatus("Resolving city from Relay...", "");
+  const csrfInfo = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "get-relay-csrf-token" }, (response) => {
+      resolve(response || { ok: false, token: "" });
+    });
+  });
 
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: fetchLoadsViaApi,
-    args: ["https://relay.amazon.co.uk", dropOff],
+    args: ["https://relay.amazon.co.uk", dropOff, csrfInfo?.token || ""],
     world: "MAIN",
   });
 
@@ -114,7 +119,7 @@ async function exportLoads(tabId, dropOff) {
 }
 
 // ─── Runs inside the page ─────────────────────────────────────────────────────
-async function fetchLoadsViaApi(relayBase, dropOff) {
+async function fetchLoadsViaApi(relayBase, dropOff, storedCsrfToken) {
   const base = String(relayBase || "https://relay.amazon.co.uk").replace(/\/+$/, "");
 
   const readCookie = (name) => {
@@ -212,7 +217,7 @@ async function fetchLoadsViaApi(relayBase, dropOff) {
     return "";
   };
 
-  const csrfToken = readCsrfToken();
+  const csrfToken = (storedCsrfToken && String(storedCsrfToken).trim()) || readCsrfToken();
 
   const fetchJson = async (url, options) => {
     const baseHeaders = {
@@ -511,7 +516,7 @@ async function fetchLoadsViaApi(relayBase, dropOff) {
       throw new Error("No Relay city match found for " + (dropOff?.name || "selected location") + ".");
     }
     if (!csrfToken) {
-      throw new Error("No x-csrf-token found on the Relay page. Run one manual Relay search in that tab, then try again.");
+      throw new Error("No x-csrf-token available yet. Run one manual Relay search in that tab so the extension can capture it, then try again.");
     }
 
     const payload = {

@@ -30,6 +30,31 @@ function getConfig() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ── capture Relay CSRF token from real browser requests ─────────────────────
+chrome.webRequest.onBeforeSendHeaders.addListener(
+  async (details) => {
+    try {
+      const headers = details.requestHeaders || [];
+      const csrfHeader = headers.find((h) => String(h.name || "").toLowerCase() === "x-csrf-token");
+      if (!csrfHeader || !csrfHeader.value) return;
+
+      await chrome.storage.local.set({
+        relayCsrfToken: csrfHeader.value,
+        relayCsrfTokenUpdatedAt: Date.now(),
+      });
+    } catch (e) {
+      /* ignore capture failures */
+    }
+  },
+  {
+    urls: [
+      "https://relay.amazon.co.uk/api/loadboard/search*",
+      "https://relay.amazon.com/api/loadboard/search*",
+    ],
+  },
+  ["requestHeaders", "extraHeaders"]
+);
+
 // ── progress reporting ───────────────────────────────────────────────────────
 // Persisted to storage so the popup can show it even after being reopened,
 // and also pushed live via runtime messaging while the popup is open.
@@ -204,5 +229,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     harvest();
     sendResponse({ ok: true });
     return; // not async
+  }
+
+  if (msg && msg.type === "get-relay-csrf-token") {
+    chrome.storage.local.get(["relayCsrfToken", "relayCsrfTokenUpdatedAt"], (result) => {
+      sendResponse({
+        ok: true,
+        token: result.relayCsrfToken || "",
+        updatedAt: result.relayCsrfTokenUpdatedAt || null,
+      });
+    });
+    return true;
   }
 });
