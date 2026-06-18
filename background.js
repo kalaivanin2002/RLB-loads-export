@@ -227,6 +227,33 @@ async function waitForEntitiesResponse(maxWaitMs = 15000) {
   throw new Error("Timed out waiting for entitiesV2 response from the page (waited " + maxWaitMs + "ms)");
 }
 
+async function injectManualApiCall(tabId) {
+  function manualFetchEntities() {
+    return fetch("/api/tours/entitiesV2", {
+      credentials: "include",
+      headers: { Accept: "application/json" }
+    })
+    .then(r => r.json())
+    .then(data => {
+      window.postMessage({
+        source: "RLB_ENTITIES",
+        entities: data
+      }, "*");
+      return data;
+    })
+    .catch(e => {
+      console.error("[RLB Manual] Failed to fetch entities:", e);
+      throw e;
+    });
+  }
+
+  await chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: manualFetchEntities,
+    world: "MAIN"
+  });
+}
+
 async function navigateToInTransitPage(tabId, cfg) {
   const inTransitUrl = cfg.relayBase.replace(/\/+$/, "") + "/tours/in-transit?ref=owp_nav_tours";
   await chrome.tabs.update(tabId, { url: inTransitUrl });
@@ -302,7 +329,21 @@ async function syncInTransitTrips() {
     }
 
     await log("trips", "Waiting for entitiesV2 API response from the page…", "info");
-    const data = await waitForEntitiesResponse(30000);
+    let data;
+    try {
+      data = await waitForEntitiesResponse(10000);
+      await log("trips", "Intercepted API response via hook.js", "info");
+    } catch (e) {
+      await log("trips", "Hook interception timed out, triggering manual API call…", "warn");
+      try {
+        await injectManualApiCall(tab.id);
+        data = await waitForEntitiesResponse(15000);
+        await log("trips", "Fetched API response via manual call", "info");
+      } catch (e2) {
+        await log("trips", "Both interception and manual call failed: " + (e2.message || String(e2)), "error");
+        throw e2;
+      }
+    }
     const entities = extractEntries(data);
     await log("trips", "Captured " + entities.length + " trip entities from API response.", "success");
 

@@ -94,5 +94,32 @@
       }
       return origSet.apply(this, arguments);
     };
+
+    // Also intercept XMLHttpRequest for entitiesV2 API
+    const origOpen = XHR.prototype.open;
+    XHR.prototype.open = function(method, url) {
+      const isEntitiesCall = typeof url === "string" && url.includes("/api/tours/entitiesV2");
+      if (isEntitiesCall) {
+        const self = this;
+        const origOnReadyStateChange = this.onreadystatechange;
+        this.onreadystatechange = function() {
+          if (self.readyState === 4 && self.status === 200) {
+            try {
+              const data = JSON.parse(self.responseText);
+              window.postMessage({
+                source: "RLB_ENTITIES",
+                entities: data
+              }, "*");
+            } catch (e) {
+              console.error("[RLB Hook] Failed to parse XMLHttpRequest response:", e);
+            }
+          }
+          if (typeof origOnReadyStateChange === "function") {
+            return origOnReadyStateChange.apply(this, arguments);
+          }
+        };
+      }
+      return origOpen.apply(this, arguments);
+    };
   }
 })();
