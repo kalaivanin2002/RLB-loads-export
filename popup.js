@@ -240,6 +240,14 @@ function pageInject(dropOffName) {
       }
     }
 
+    const allOption = [...dropdown.querySelectorAll("[role='checkbox'], [role='button'], button, label, div")].find(
+      (node) => (node.textContent || "").trim().toLowerCase() === "all"
+    );
+    if (allOption) {
+      allOption.click();
+      await wait(400);
+    }
+
     // Close the equipment dropdown by clicking outside
     await wait(200);
     document.body.click();

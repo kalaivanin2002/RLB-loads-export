@@ -5,9 +5,8 @@
 //     batch to the OnTrack rlb-locations endpoint.
 //
 //   "loads" (Phase 2): GET all saved locations from OnTrack, then for each one
-//     POST relay.amazon.co.uk/api/loadboard/search (from the Relay page, so the
-//     session cookie is sent), and POST the search response to the OnTrack
-//     ingest endpoint.
+//     drive the Relay load board UI inside the page, scrape the rendered
+//     results, and POST the captured loads to the OnTrack ingest endpoint.
 //
 // Relay calls run INSIDE the open Relay tab via chrome.scripting (same-origin).
 // OnTrack calls run HERE in the service worker (host_permissions bypass CORS,
@@ -92,6 +91,225 @@ async function runInPage(tabId, url, init) {
   const r = results && results[0] && results[0].result;
   if (!r) throw new Error("no response from page");
   return r;
+}
+
+async function runDomInPage(tabId, func, args) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: func,
+    args: args,
+    world: "MAIN",
+  });
+  const r = results && results[0] && results[0].result;
+  if (r === undefined || r === null) throw new Error("no response from page");
+  return r;
+}
+
+// Runs in the Relay page. It fills the origin search, selects the first
+// matching location suggestion, opens Equipment, chooses Tractor and trailer
+// plus All, clicks Search loads, then scrapes the rendered load cards.
+function pageSearchAndScrape(loc, cfg) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function typeInto(input, value) {
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    nativeSetter.call(input, value);
+    ["focus", "input", "change"].forEach((name) =>
+      input.dispatchEvent(new Event(name, { bubbles: true }))
+    );
+    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true }));
+    input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true }));
+  }
+
+  function clickText(root, text) {
+    const needle = String(text).trim().toLowerCase();
+    const nodes = [...root.querySelectorAll("button, [role='button'], [role='option'], [role='checkbox'], label, div, span")];
+    const match = nodes.find((node) => {
+      const t = (node.textContent || "").trim().toLowerCase();
+      return t === needle || t.includes(needle);
+    });
+    if (match) {
+      match.click();
+      return true;
+    }
+    return false;
+  }
+
+  function scrapeLoads() {
+    const cards = [...document.querySelectorAll(".load-card > div")];
+    return cards
+      .map((card) => {
+        const text = (el) => el?.textContent?.trim() ?? "";
+
+        const loadId = card.id ?? "";
+        const deadhead = text(card.querySelector(".css-8a5j1c .css-1maqsxd"));
+
+        const stopDetails = [...card.querySelectorAll(".css-soq2b7 > div")].filter(
+          (d) => d.querySelector("span[tabindex]")
+        );
+
+        const pickupLocation = text(stopDetails[0]?.querySelector(".wo-card-header__components"));
+        const pickupTime = text(stopDetails[0]?.querySelectorAll(".wo-card-header__components")?.[1]);
+        const dropoffLocation = text(stopDetails[1]?.querySelector(".wo-card-header__components"));
+        const dropoffTime = text(stopDetails[1]?.querySelectorAll(".wo-card-header__components")?.[1]);
+
+        const tripBlock = [...card.querySelectorAll(".css-8a5j1c")][1];
+        const tripDistance = text(tripBlock?.querySelector(".css-1xm8gt .wo-card-header__components"));
+        const duration = text(tripBlock?.querySelector(".css-fnc3ff .wo-card-header__components"));
+
+        const equipment = text(card.querySelector(".equipment-type-text span"));
+        const trailerType = text(card.querySelector(".trailer-type-circle p"));
+        const loadingType =
+          card.querySelector(".loading-type")?.getAttribute("title") ?? text(card.querySelector(".loading-type"));
+
+        const totalPayout = text(card.querySelector(".wo-total_payout"));
+        const ratePerMile = text(card.querySelector('[class*="n4zms0"] .wo-card-header__components'));
+
+        return {
+          loadId,
+          deadhead,
+          pickupLocation,
+          pickupTime,
+          dropoffLocation,
+          dropoffTime,
+          tripDistance,
+          duration,
+          equipment,
+          trailerType,
+          loadingType,
+          totalPayout,
+          ratePerMile,
+        };
+      })
+      .filter((l) => l.loadId);
+  }
+
+  async function setOrigin() {
+    const originText =
+      (loc && (loc.displayValue || loc.display_value || loc.name || loc.cityName)) ||
+      "";
+    const input =
+      document.querySelector("#rlb-origin-city-filter input[role='combobox']") ||
+      document.querySelector("#rlb-origin-city-filter input") ||
+      document.querySelector('input[placeholder="Start typing to search"]');
+    if (!input) throw new Error("origin input not found");
+
+    const wrapper = document.querySelector("#rlb-origin-city-filter");
+    if (wrapper) wrapper.click();
+    await wait(200);
+
+    input.focus();
+    await wait(150);
+    typeInto(input, "");
+    await wait(100);
+    typeInto(input, originText);
+    await wait(1800);
+
+    const listboxId = input.getAttribute("aria-controls");
+    const listbox = listboxId ? document.getElementById(listboxId) : document.querySelector('[role="listbox"]');
+    if (!listbox) throw new Error("origin listbox not found");
+
+    const normalized = originText.toLowerCase().split(",")[0].trim();
+    const options = [...listbox.querySelectorAll('[role="option"]')];
+    const match =
+      options.find((o) => {
+        const t = (o.textContent || "").trim().toLowerCase();
+        const a = (o.getAttribute("aria-label") || "").trim().toLowerCase();
+        return t.includes(normalized) || a.includes(normalized);
+      }) ||
+      options.find((o) => !/your location/i.test(o.textContent || "")) ||
+      options[0];
+
+    if (!match) throw new Error("no origin suggestion found");
+    match.click();
+    await wait(600);
+    document.body.click();
+    await wait(300);
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
+    await wait(400);
+  }
+
+  async function setEquipment() {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await wait(300);
+    document.body.click();
+    await wait(400);
+
+    const equipInput =
+      document.querySelector("#equipment-trailer-filter input[aria-label='Equipment*']") ||
+      document.querySelector("#equipment-trailer-filter input") ||
+      document.querySelector('input[aria-label="Equipment*"]');
+    if (!equipInput) throw new Error("equipment input not found");
+
+    equipInput.focus();
+    await wait(200);
+    equipInput.click();
+    await wait(1200);
+
+    const dropdown =
+      document.querySelector("#equipment-type-filter-dropdown") ||
+      document.querySelector("#equipment-trailer-filter") ||
+      document.body;
+    const tractorClicked = clickText(dropdown, "Tractor and trailer");
+    if (!tractorClicked) throw new Error("tractor and trailer option not found");
+    await wait(500);
+
+    const allClicked = clickText(dropdown, "All");
+    if (!allClicked) {
+      // Some builds render "All" as a checkbox inside a card instead of a direct button.
+      const allNode = [...dropdown.querySelectorAll("[role='checkbox'], [role='button'], button, label, div")].find((node) =>
+        (node.textContent || "").trim().toLowerCase() === "all"
+      );
+      if (allNode) allNode.click();
+    }
+    await wait(500);
+
+    document.body.click();
+    await wait(300);
+  }
+
+  async function clickSearchLoads() {
+    let btn = null;
+    for (let i = 0; i < 20; i++) {
+      btn = [...document.querySelectorAll('button[type="button"]')].find(
+        (b) => (b.textContent || "").trim().toLowerCase() === "search loads"
+      );
+      if (btn && !btn.disabled) break;
+      await wait(250);
+    }
+    if (!btn) throw new Error("Search loads button not found");
+    if (btn.disabled) throw new Error("Search loads button stayed disabled");
+    btn.click();
+    await wait(300);
+  }
+
+  async function waitForLoads() {
+    const timeoutAt = Date.now() + 15000;
+    while (Date.now() < timeoutAt) {
+      const loads = scrapeLoads();
+      if (loads.length) return loads;
+      await wait(500);
+    }
+    return scrapeLoads();
+  }
+
+  return (async () => {
+    await wait(800);
+    await setOrigin();
+    await wait(1200);
+    await setEquipment();
+    await wait(800);
+    await clickSearchLoads();
+    const loads = await waitForLoads();
+    return {
+      loads: loads,
+      workOpportunities: loads,
+      search: {
+        origin: (loc && (loc.displayValue || loc.display_value || loc.name || loc.cityName)) || "",
+        equipment: ["Tractor and trailer", "All"],
+      },
+    };
+  })();
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -212,7 +430,7 @@ async function harvest() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// PHASE 2 — for each saved location, search Relay loads → ingest the response
+// PHASE 2 — for each saved location, drive Relay search UI → ingest response
 // ═════════════════════════════════════════════════════════════════════════════
 async function getLocations(cfg) {
   const res = await fetch(cfg.ontrackUrl, {
@@ -234,117 +452,10 @@ async function getLocations(cfg) {
   return [];
 }
 
-// Build the loadboard/search payload for one location (mirrors the sample,
-// injecting this location as the single origin city).
-function buildSearchPayload(loc, cfg) {
-  const name = loc.name != null ? loc.name : loc.cityName;
-  const stateCode = loc.stateCode != null ? loc.stateCode : loc.state_code;
-  const country = loc.country != null ? loc.country : null;
-  const latitude = num(loc.latitude != null ? loc.latitude : loc.lat);
-  const longitude = num(loc.longitude != null ? loc.longitude : loc.lng);
-  const displayValue =
-    (loc.displayValue != null ? loc.displayValue : loc.display_value) ||
-    (name + (stateCode ? ", " + stateCode : ""));
-  const radius = Number(cfg.searchRadius) || 5;
-
-  return {
-    workOpportunityTypeList: ["ROUND_TRIP", "ONE_WAY"],
-    originCity: null,
-    liveCity: null,
-    originCities: [
-      {
-        name: name,
-        stateCode: stateCode,
-        country: country,
-        latitude: latitude,
-        longitude: longitude,
-        displayValue: displayValue,
-        isCityLive: false,
-        isAnywhere: false,
-        uniqueKey: String(latitude) + displayValue,
-      },
-    ],
-    startCityName: null,
-    startCityStateCode: null,
-    startCityLatitude: null,
-    startCityLongitude: null,
-    startCityDisplayValue: null,
-    isOriginCityLive: null,
-    startCityRadius: 50,
-    destinationCity: null,
-    originCitiesRadiusFilters: [
-      {
-        cityLatitude: latitude,
-        cityLongitude: longitude,
-        cityName: name,
-        cityStateCode: stateCode,
-        cityDisplayValue: displayValue,
-        radius: radius,
-      },
-    ],
-    destinationCitiesRadiusFilters: null,
-    exclusionCitiesFilter: null,
-    endCityName: null,
-    endCityStateCode: null,
-    endCityDisplayValue: null,
-    endCityLatitude: null,
-    endCityLongitude: null,
-    isDestinationCityLive: null,
-    endCityRadius: null,
-    startDate: null,
-    endDate: null,
-    minDistance: null,
-    maxDistance: null,
-    minimumDurationInMillis: null,
-    maximumDurationInMillis: null,
-    minPayout: null,
-    minPricePerDistance: null,
-    driverTypeFilters: [],
-    uiiaCertificationsFilter: [],
-    workOpportunityOperatingRegionFilter: [],
-    loadingTypeFilters: [],
-    maximumNumberOfStops: null,
-    workOpportunityAccessType: null,
-    sortByField: "relevanceForSearchTab",
-    sortOrder: "asc",
-    visibilityStatusType: "VISIBLE",
-    categorizedEquipmentTypeList: [{ equipmentCategory: "REQUIRED", equipmentsList: null }],
-    categorizedEquipmentTypeListForFilterPills: [{ equipmentCategory: "REQUIRED", equipmentsList: null }],
-    eligibleFeaturesExclusionFilter: ["UNANCHORED_NEGO"],
-    nextItemToken: 0,
-    resultSize: Number(cfg.resultSize) || 50,
-    searchURL: "",
-    isAutoRefreshCall: true,
-    notificationId: "",
-    auditContextMap: JSON.stringify({
-      rlbChannel: "EXACT_MATCH",
-      isOriginCityLive: "false",
-      isDestinationCityLive: "false",
-      userAgent: (self.navigator && self.navigator.userAgent) || "",
-      source: "AVAILABLE_WORK",
-    }),
-  };
-}
-
-async function searchLoadsInPage(tabId, cfg, payload) {
-  const url = cfg.relayBase.replace(/\/+$/, "") + "/api/loadboard/search";
-  const r = await runInPage(tabId, url, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!r.ok) throw new Error("Relay search HTTP " + r.status);
-  try {
-    return JSON.parse(r.body);
-  } catch (e) {
-    throw new Error("Relay search response was not JSON");
-  }
-}
-
 function countWorkOpportunities(data) {
   if (!data || typeof data !== "object") return 0;
   if (Array.isArray(data.workOpportunities)) return data.workOpportunities.length;
+  if (Array.isArray(data.loads)) return data.loads.length;
   for (const k of ["workOpportunityList", "results", "data"]) {
     if (Array.isArray(data[k])) return data[k].length;
   }
@@ -415,8 +526,7 @@ async function findLoads() {
       const loc = toSearch[i];
       const label = loc.displayValue || loc.name || "#" + i;
       try {
-        const payload = buildSearchPayload(loc, cfg);
-        const data = await searchLoadsInPage(tab.id, cfg, payload);
+        const data = await runDomInPage(tab.id, pageSearchAndScrape, [loc, cfg]);
         const n = countWorkOpportunities(data);
 
         results.push({ location: loc, capturedAt: new Date().toISOString(), count: n, response: data });
