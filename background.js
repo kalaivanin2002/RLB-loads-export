@@ -14,6 +14,8 @@
 // Bearer-token auth).
 // ─────────────────────────────────────────────────────────────────────────────
 
+importScripts("payloads.js"); // provides self.RLB_PAYLOADS (entitiesV2 request bodies)
+
 const DEFAULTS = {
   relayBase: "https://relay.amazon.co.uk",
   ontrackUrl: "https://ontrack-api.agilecyber.com/api/v1/rlb-locations",
@@ -988,6 +990,340 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 })();
 
+// ═════════════════════════════════════════════════════════════════════════════
+// LOAD PLANNER — Stage A: per-driver availability from trips
+//   Fetch in-transit + upcoming entitiesV2, chain each driver's trips, derive
+//   freeAt (last trip end) + freeLocation (last drop-off) + domicile + equipment.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Refresh the date bounds in a captured entitiesV2 payload so the trip window
+// stays current (broad: now-30d … now+180d). Returns a fresh clone.
+function freshenDates(payload) {
+  const clone = JSON.parse(JSON.stringify(payload));
+  const lte = new Date(Date.now() + 180 * 86400000).toISOString();
+  const gte = new Date(Date.now() - 30 * 86400000).toISOString();
+  (function walk(o) {
+    if (Array.isArray(o)) return o.forEach(walk);
+    if (o && typeof o === "object") {
+      for (const k of Object.keys(o)) {
+        if (k === "lte" && typeof o[k] === "string") o[k] = lte;
+        else if (k === "gte" && typeof o[k] === "string") o[k] = gte;
+        else walk(o[k]);
+      }
+    }
+  })(clone);
+  return clone;
+}
+
+// Runs in the page: POST entitiesV2, then return ONLY slim trip fields (the raw
+// response is multi-MB — we never ship that across contexts).
+function pageFetchTrips(url, init) {
+  return fetch(url, init)
+    .then(function (r) {
+      return r.text().then(function (t) {
+        if (!r.ok) return { ok: false, status: r.status, entities: [] };
+        var data;
+        try { data = JSON.parse(t); } catch (e) { return { ok: false, status: r.status, parseError: true, entities: [] }; }
+        var ents = data && Array.isArray(data.entities) ? data.entities : [];
+        var slim = ents.map(function (e) {
+          var dl = e.drivers && e.drivers.length ? e.drivers.slice() : [];
+          if (!dl.length) {
+            (e.loads || []).forEach(function (l) { (l.driverList || []).forEach(function (d) { dl.push(d); }); });
+          }
+          var seen = {}, drivers = [];
+          dl.forEach(function (d) {
+            if (!d || !d.id || seen[d.id]) return;
+            seen[d.id] = true;
+            drivers.push({
+              id: d.id,
+              staticDriverId: d.staticDriverId || null,
+              name: ((d.firstName || "") + " " + (d.lastName || "")).trim() || "Unknown",
+              phoneNumber: d.phoneNumber || null,
+              email: d.email || null,
+            });
+          });
+          var best = null, bestT = -Infinity;
+          (e.loads || []).forEach(function (l) {
+            (l.stops || []).forEach(function (s) {
+              if (s.stopType !== "DROPOFF" || !s.location) return;
+              var acts = s.actions || [];
+              var co = acts.filter(function (a) { return a.type === "CHECKOUT"; })[0] || acts[acts.length - 1];
+              var ts = co && co.plannedTime ? Date.parse(co.plannedTime) : (s.stopSequenceNumber || 0);
+              if (ts > bestT) {
+                bestT = ts;
+                var loc = s.location;
+                best = {
+                  city: loc.city || null,
+                  state: loc.state || null,
+                  country: loc.country || null,
+                  postalCode: loc.postalCode || null,
+                  latitude: loc.latitude != null ? loc.latitude : null,
+                  longitude: loc.longitude != null ? loc.longitude : null,
+                  code: loc.label || loc.stopCode || null,
+                  plannedTime: co && co.plannedTime ? co.plannedTime : null,
+                };
+              }
+            });
+          });
+          var equip = null;
+          (e.loads || []).forEach(function (l) { if (!equip && l && l.equipmentType) equip = l.equipmentType; });
+          return {
+            id: e.id,
+            entityType: e.entityType,
+            tourState: e.tourState || null,
+            endTime: e.endTime || e.lastDeliveryTime || null,
+            domicileRoute: e.domicileRoute || null,
+            drivers: drivers,
+            finalDropoff: best,
+            equipment: equip,
+          };
+        });
+        return { ok: true, status: r.status, entities: slim };
+      });
+    })
+    .catch(function (err) { return { ok: false, status: 0, error: String(err), entities: [] }; });
+}
+
+async function fetchEntities(tabId, cfg, csrf, payload) {
+  const url = cfg.relayBase.replace(/\/+$/, "") + "/api/tours/entitiesV2";
+  const headers = { "Content-Type": "application/json", Accept: "application/json" };
+  if (csrf && csrf.token) headers[csrf.headerName || "anti-csrftoken-a2z"] = csrf.token;
+  const res = await chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: pageFetchTrips,
+    args: [url, { method: "POST", credentials: "include", headers: headers, body: JSON.stringify(payload) }],
+    world: "MAIN",
+  });
+  const r = res && res[0] && res[0].result;
+  if (!r) throw new Error("no response from page");
+  if (!r.ok) throw new Error("entitiesV2 HTTP " + r.status + (r.parseError ? " (parse error)" : "") + (r.error ? " " + r.error : ""));
+  return r.entities || [];
+}
+
+// Chain slim entities by driver → one availability record per driver (their
+// latest-ending assigned trip). Drivers free in the past are treated as free now.
+function buildAvailability(entities) {
+  const byDriver = {};
+  for (const e of entities) {
+    if (!e.drivers || !e.drivers.length) continue; // unassigned capacity block
+    const endMs = e.endTime ? Date.parse(e.endTime) : -Infinity;
+    for (const d of e.drivers) {
+      const cur = byDriver[d.id];
+      if (!cur || endMs > cur._endMs) {
+        byDriver[d.id] = {
+          driver: d,
+          lastTripId: e.id,
+          lastTripState: e.tourState,
+          lastTripEndTime: e.endTime,
+          freeLocation: e.finalDropoff,
+          domicile: e.domicileRoute,
+          equipment: e.equipment,
+          _endMs: endMs,
+        };
+      }
+    }
+  }
+  const now = Date.now();
+  const out = [];
+  for (const id in byDriver) {
+    const a = byDriver[id];
+    const endMs = a._endMs;
+    delete a._endMs;
+    const effMs = isFinite(endMs) && endMs > now ? endMs : now;
+    a.freeAt = isFinite(endMs) ? a.lastTripEndTime : null;
+    a.freeAtEffective = new Date(effMs).toISOString();
+    a.alreadyFree = !(isFinite(endMs) && endMs > now);
+    out.push(a);
+  }
+  out.sort((x, y) => Date.parse(x.freeAtEffective) - Date.parse(y.freeAtEffective));
+  return out;
+}
+
+// Default scoring weights. Components are emitted in the output so ranking is
+// transparent and tunable — adjust here (or we can expose them in settings).
+const PLANNER_WEIGHTS = { rate: 0.5, deadhead: 0.3, timing: 0.2 };
+const HOUR_MS = 3600000;
+const r2 = (x) => Math.round(x * 100) / 100;
+const r3 = (x) => Math.round(x * 1000) / 1000;
+
+function ratePerMile(wo) {
+  const p = wo.payout && wo.payout.value;
+  const d = wo.totalDistance && wo.totalDistance.value;
+  return p && d ? p / d : 0;
+}
+
+// Filter loads to the feasibility window (free+2h … free+48h) and score them.
+function planLoadsForDriver(avail, response) {
+  const freeMs = Date.parse(avail.freeAtEffective);
+  const lower = freeMs + 2 * HOUR_MS;
+  const upper = freeMs + 48 * HOUR_MS;
+  const wos = response && Array.isArray(response.workOpportunities) ? response.workOpportunities : [];
+
+  let droppedForTiming = 0;
+  const feasible = [];
+  for (const wo of wos) {
+    const pk = wo.firstPickupTime ? Date.parse(wo.firstPickupTime) : NaN;
+    if (isNaN(pk) || pk < lower || pk > upper) { droppedForTiming++; continue; }
+    feasible.push({ wo: wo, pk: pk });
+  }
+
+  const enriched = feasible.map((f) => {
+    const rpm = ratePerMile(f.wo);
+    const dh = f.wo.deadhead && f.wo.deadhead.value != null ? f.wo.deadhead.value : null;
+    const gapH = (f.pk - lower) / HOUR_MS;
+    return { wo: f.wo, rpm: rpm, dh: dh, gapH: gapH };
+  });
+
+  const maxRpm = Math.max(1e-9, ...enriched.map((e) => e.rpm));
+  const dhVals = enriched.map((e) => e.dh).filter((v) => v != null);
+  const maxDh = dhVals.length ? Math.max(...dhVals) : 0;
+  const windowH = (upper - lower) / HOUR_MS;
+
+  for (const e of enriched) {
+    const rateScore = e.rpm / maxRpm;
+    const dhScore = e.dh == null || maxDh === 0 ? 0.5 : 1 - e.dh / maxDh;
+    const timingScore = windowH > 0 ? 1 - e.gapH / windowH : 0.5;
+    e.score =
+      PLANNER_WEIGHTS.rate * rateScore +
+      PLANNER_WEIGHTS.deadhead * dhScore +
+      PLANNER_WEIGHTS.timing * timingScore;
+  }
+  enriched.sort((a, b) => b.score - a.score);
+
+  function toRec(e) {
+    const sl = e.wo.startLocation || {};
+    const el = e.wo.endLocation || {};
+    return {
+      loadId: e.wo.id,
+      pickup: {
+        city: sl.city || null,
+        lat: sl.latitude != null ? sl.latitude : null,
+        lng: sl.longitude != null ? sl.longitude : null,
+        code: sl.label || sl.stopCode || null,
+        time: e.wo.firstPickupTime || null,
+      },
+      dropoff: { city: el.city || null, domicile: el.domicile || null, time: e.wo.lastDeliveryTime || null },
+      deadheadMiles: e.dh,
+      tripMiles: e.wo.totalDistance && e.wo.totalDistance.value,
+      payout: e.wo.payout && e.wo.payout.value,
+      payoutUnit: (e.wo.payout && e.wo.payout.unit) || null,
+      ratePerMile: r2(e.rpm),
+      equipment: (e.wo.loads && e.wo.loads[0] && e.wo.loads[0].equipmentType) || null,
+      workType: e.wo.workOpportunityType || null,
+      score: r3(e.score),
+      components: { ratePerMile: r2(e.rpm), deadheadMiles: e.dh, pickupGapHours: r2(e.gapH) },
+    };
+  }
+
+  return {
+    recommended: enriched.length ? toRec(enriched[0]) : null,
+    alternatives: enriched.slice(1, 4).map(toRec),
+    candidatesConsidered: wos.length,
+    feasibleCount: feasible.length,
+    droppedForTiming: droppedForTiming,
+  };
+}
+
+let isPlanning = false;
+async function runPlanner() {
+  if (isPlanning) { await log("planner", "Planner already running.", "warn"); return; }
+  isPlanning = true;
+  await resetLog("planner");
+  try {
+    const cfg = await getConfig();
+    const tab = await findRelayTab();
+    if (!tab) {
+      await log("planner", "No Amazon Relay tab found — open the Relay site (logged in) first.", "error");
+      return;
+    }
+    const csrf = await resolveCsrf(tab.id);
+    if (!csrf) {
+      await log("planner", "No CSRF token found. Reload the Relay tab, run one search, then retry.", "error");
+      return;
+    }
+
+    await log("planner", "Fetching in-transit trips…");
+    const inTransit = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.inTransit));
+    await log("planner", "In-transit entities: " + inTransit.length);
+
+    await log("planner", "Fetching upcoming trips…");
+    const upcoming = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.upcoming));
+    await log("planner", "Upcoming entities: " + upcoming.length);
+
+    const availability = buildAvailability(inTransit.concat(upcoming));
+    await chrome.storage.local.set({ plannerAvailability: availability, plannerResults: [] });
+    await log("planner", "Built availability for " + availability.length + " driver(s). Searching loads…", "success");
+
+    const base = Math.max(0, Number(cfg.delayMs) || 300);
+    const results = [];
+    let withRec = 0;
+
+    for (let i = 0; i < availability.length; i++) {
+      const a = availability[i];
+      const fl = a.freeLocation || {};
+      const baseRec = {
+        driver: a.driver,
+        currentTrip: {
+          tripId: a.lastTripId,
+          state: a.lastTripState,
+          finishAt: a.lastTripEndTime,
+          dropOff: fl,
+          domicile: a.domicile,
+          equipment: a.equipment,
+        },
+        availableFrom: a.freeAtEffective,
+        alreadyFree: a.alreadyFree,
+        earliestPickupAllowed: new Date(Date.parse(a.freeAtEffective) + 2 * HOUR_MS).toISOString(),
+        latestPickupAllowed: new Date(Date.parse(a.freeAtEffective) + 48 * HOUR_MS).toISOString(),
+      };
+
+      if (fl.latitude == null || fl.longitude == null || !fl.city) {
+        results.push(Object.assign(baseRec, { recommended: null, alternatives: [], note: "No usable drop-off location in trip data" }));
+        await log("planner", i + 1 + "/" + availability.length + " " + a.driver.name + ": no usable drop-off — skipped", "warn");
+        await chrome.storage.local.set({ plannerResults: results });
+        continue;
+      }
+
+      try {
+        const loc = {
+          name: fl.city,
+          stateCode: "UK",
+          country: "EU",
+          latitude: fl.latitude,
+          longitude: fl.longitude,
+          displayValue: fl.city + ", UK",
+        };
+        const payload = buildSearchPayload(loc, cfg);
+        const resp = await withRetry(() => searchLoadsInPage(tab.id, cfg, payload, csrf), "search", a.driver.name, 3);
+        const plan = planLoadsForDriver(a, resp);
+        results.push(Object.assign(baseRec, plan));
+        if (plan.recommended) withRec++;
+        await log(
+          "planner",
+          i + 1 + "/" + availability.length + " " + a.driver.name + " @ " + fl.city + ": " +
+            plan.feasibleCount + " feasible / " + plan.candidatesConsidered + " loads → " +
+            (plan.recommended
+              ? "£" + plan.recommended.payout + " @ " + plan.recommended.ratePerMile + "/mi, " + plan.recommended.deadheadMiles + "mi dh"
+              : "no feasible load"),
+          plan.recommended ? "success" : "info"
+        );
+      } catch (e) {
+        results.push(Object.assign(baseRec, { recommended: null, alternatives: [], error: e && e.message ? e.message : String(e) }));
+        await log("planner", i + 1 + "/" + availability.length + " " + a.driver.name + ": ERROR " + (e.message || e), "error");
+      }
+      await chrome.storage.local.set({ plannerResults: results });
+      await sleep(base + rand(base));
+    }
+
+    await log("planner", "Plan complete. " + withRec + "/" + availability.length + " driver(s) have a recommended load.", "success");
+  } catch (e) {
+    await log("planner", "Error: " + (e && e.message ? e.message : String(e)), "error");
+  } finally {
+    isPlanning = false;
+    await setRunning("planner", false);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
@@ -1009,6 +1345,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       break;
     case "start-sync-trips":
       syncInTransitTrips();
+      break;
+    case "start-planner":
+      runPlanner();
       break;
     default:
       return;

@@ -42,6 +42,10 @@
     downloadTrips: $("downloadTripsBtn"),
     tripsProgress: $("tripsProgress"),
     tripsLog: $("tripsLog"),
+    plan: $("planBtn"),
+    downloadPlan: $("downloadPlanBtn"),
+    plannerProgress: $("plannerProgress"),
+    plannerLog: $("plannerLog"),
   };
 
   // Per-job button + log wiring.
@@ -49,6 +53,7 @@
     harvest: { btn: els.sync, logEl: els.syncLog, idle: "Sync RLB Locations (a–z)", busy: "Syncing…" },
     loads: { btn: els.findLoads, logEl: els.loadsLog, idle: "Find Loads (all locations)", busy: "Finding loads…" },
     trips: { btn: els.syncTrips, logEl: els.tripsLog, idle: "Sync In-Transit Trips", busy: "Syncing trips…" },
+    planner: { btn: els.plan, logEl: els.plannerLog, idle: "Plan Loads", busy: "Planning…" },
   };
 
   function loadSettings() {
@@ -101,6 +106,24 @@
     send("retry-failed-loads");
   });
   els.syncTrips.addEventListener("click", () => start("trips", "start-sync-trips"));
+  els.plan.addEventListener("click", () => start("planner", "start-planner"));
+
+  els.downloadPlan.addEventListener("click", () => {
+    chrome.storage.local.get(["plannerResults", "plannerAvailability"], (r) => {
+      const data = r.plannerResults && r.plannerResults.length ? r.plannerResults : r.plannerAvailability || [];
+      if (!data.length) {
+        appendLog("planner", { msg: "Nothing to download yet.", level: "warn", ts: Date.now() });
+        return;
+      }
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "rlb-plan-" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".json";
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  });
 
   function send(messageType) {
     chrome.runtime.sendMessage({ type: messageType }, () => {
@@ -233,14 +256,42 @@
     }
   });
 
+  // Reflect the planner job state.
+  function refreshPlannerUi() {
+    chrome.storage.local.get(["plannerRunning", "plannerResults", "plannerAvailability"], (r) => {
+      const running = r.plannerRunning === true;
+      const resCount = (r.plannerResults || []).length;
+      const availCount = (r.plannerAvailability || []).length;
+      const withRec = (r.plannerResults || []).filter((x) => x && x.recommended).length;
+      els.plan.disabled = running;
+      els.plan.textContent = running ? "Planning…" : "Plan Loads";
+      els.downloadPlan.disabled = resCount === 0 && availCount === 0;
+      els.plannerProgress.textContent = running
+        ? "Planning… (" + resCount + "/" + availCount + ")"
+        : resCount > 0
+        ? withRec + "/" + resCount + " driver(s) have a load"
+        : availCount > 0
+        ? availCount + " driver(s) (availability only)"
+        : "Idle.";
+    });
+  }
+
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.plannerRunning || changes.plannerResults || changes.plannerAvailability) {
+      refreshPlannerUi();
+    }
+  });
+
   // On open, restore settings + each job's last run.
   loadSettings();
-  chrome.storage.local.get(["harvestLog", "harvestRunning", "loadsLog", "tripsLog"], (r) => {
+  chrome.storage.local.get(["harvestLog", "harvestRunning", "loadsLog", "tripsLog", "plannerLog"], (r) => {
     renderLog("harvest", r.harvestLog);
     renderLog("loads", r.loadsLog);
     renderLog("trips", r.tripsLog);
+    renderLog("planner", r.plannerLog);
     if (r.harvestRunning) setBusy("harvest", true);
   });
   refreshLoadsUi();
   refreshTripsUi();
+  refreshPlannerUi();
 })();
