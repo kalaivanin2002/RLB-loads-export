@@ -1025,6 +1025,19 @@ function pageFetchTrips(url, init) {
         var data;
         try { data = JSON.parse(t); } catch (e) { return { ok: false, status: r.status, parseError: true, entities: [] }; }
         var ents = data && Array.isArray(data.entities) ? data.entities : [];
+        var slimLoc = function (loc, pt) {
+          if (!loc) return null;
+          return {
+            city: loc.city || null,
+            state: loc.state || null,
+            country: loc.country || null,
+            postalCode: loc.postalCode || null,
+            latitude: loc.latitude != null ? loc.latitude : null,
+            longitude: loc.longitude != null ? loc.longitude : null,
+            code: loc.label || loc.stopCode || null,
+            plannedTime: pt || null,
+          };
+        };
         var slim = ents.map(function (e) {
           var dl = e.drivers && e.drivers.length ? e.drivers.slice() : [];
           if (!dl.length) {
@@ -1042,6 +1055,8 @@ function pageFetchTrips(url, init) {
               email: d.email || null,
             });
           });
+          // final drop-off: TOUR → last DROPOFF stop; BLOCK has no stops →
+          // use locationList (has lat/lng) or startLocationCentroid.
           var best = null, bestT = -Infinity;
           (e.loads || []).forEach(function (l) {
             (l.stops || []).forEach(function (s) {
@@ -1049,28 +1064,24 @@ function pageFetchTrips(url, init) {
               var acts = s.actions || [];
               var co = acts.filter(function (a) { return a.type === "CHECKOUT"; })[0] || acts[acts.length - 1];
               var ts = co && co.plannedTime ? Date.parse(co.plannedTime) : (s.stopSequenceNumber || 0);
-              if (ts > bestT) {
-                bestT = ts;
-                var loc = s.location;
-                best = {
-                  city: loc.city || null,
-                  state: loc.state || null,
-                  country: loc.country || null,
-                  postalCode: loc.postalCode || null,
-                  latitude: loc.latitude != null ? loc.latitude : null,
-                  longitude: loc.longitude != null ? loc.longitude : null,
-                  code: loc.label || loc.stopCode || null,
-                  plannedTime: co && co.plannedTime ? co.plannedTime : null,
-                };
-              }
+              if (ts > bestT) { bestT = ts; best = slimLoc(s.location, co && co.plannedTime ? co.plannedTime : null); }
             });
           });
+          if (!best) {
+            var ll = e.locationList;
+            if (ll && ll.length) best = slimLoc(ll[ll.length - 1], e.lastDeliveryTime || null);
+            else if (e.startLocationCentroid && e.startLocationCentroid.centerAddress) {
+              best = slimLoc(e.startLocationCentroid.centerAddress, e.lastDeliveryTime || null);
+            }
+          }
           var equip = null;
           (e.loads || []).forEach(function (l) { if (!equip && l && l.equipmentType) equip = l.equipmentType; });
+          if (!equip) equip = e.equipmentType || null;
           return {
             id: e.id,
             entityType: e.entityType,
-            tourState: e.tourState || null,
+            tourState: e.tourState || e.blockState || null,
+            startTime: e.startTime || e.firstPickupTime || null,
             endTime: e.endTime || e.lastDeliveryTime || null,
             domicileRoute: e.domicileRoute || null,
             drivers: drivers,
@@ -1100,40 +1111,86 @@ async function fetchEntities(tabId, cfg, csrf, payload) {
   return r.entities || [];
 }
 
-// Chain slim entities by driver → one availability record per driver (their
-// latest-ending assigned trip). Drivers free in the past are treated as free now.
+// Build per-driver availability using the NEXT FREE GAP: each driver's trips
+// are busy intervals; we find the earliest point from now where they're not
+// booked, plus where that free window ends (the next trip's start). A load must
+// fit inside that window.
 function buildAvailability(entities) {
+  const now = Date.now();
   const byDriver = {};
   for (const e of entities) {
     if (!e.drivers || !e.drivers.length) continue; // unassigned capacity block
-    const endMs = e.endTime ? Date.parse(e.endTime) : -Infinity;
+    const endMs = e.endTime ? Date.parse(e.endTime) : NaN;
+    if (isNaN(endMs)) continue;
+    const startMs = e.startTime ? Date.parse(e.startTime) : NaN;
+    const interval = {
+      tripId: e.id,
+      state: e.tourState,
+      start: isNaN(startMs) ? endMs : startMs,
+      end: endMs,
+      endLocation: e.finalDropoff,
+      equipment: e.equipment,
+      domicile: e.domicileRoute,
+    };
     for (const d of e.drivers) {
-      const cur = byDriver[d.id];
-      if (!cur || endMs > cur._endMs) {
-        byDriver[d.id] = {
-          driver: d,
-          lastTripId: e.id,
-          lastTripState: e.tourState,
-          lastTripEndTime: e.endTime,
-          freeLocation: e.finalDropoff,
-          domicile: e.domicileRoute,
-          equipment: e.equipment,
-          _endMs: endMs,
-        };
-      }
+      if (!byDriver[d.id]) byDriver[d.id] = { driver: d, intervals: [] };
+      byDriver[d.id].intervals.push(interval);
     }
   }
-  const now = Date.now();
+
   const out = [];
   for (const id in byDriver) {
-    const a = byDriver[id];
-    const endMs = a._endMs;
-    delete a._endMs;
-    const effMs = isFinite(endMs) && endMs > now ? endMs : now;
-    a.freeAt = isFinite(endMs) ? a.lastTripEndTime : null;
-    a.freeAtEffective = new Date(effMs).toISOString();
-    a.alreadyFree = !(isFinite(endMs) && endMs > now);
-    out.push(a);
+    const rec = byDriver[id];
+    const ivs = rec.intervals.slice().sort((a, b) => a.start - b.start);
+
+    // Merge overlapping/adjacent busy intervals.
+    const merged = [];
+    for (const iv of ivs) {
+      const last = merged[merged.length - 1];
+      if (last && iv.start <= last.end) {
+        if (iv.end > last.end) {
+          last.end = iv.end;
+          last.endLocation = iv.endLocation;
+          last.equipment = iv.equipment || last.equipment;
+          last.tripId = iv.tripId;
+          last.state = iv.state;
+          last.domicile = iv.domicile || last.domicile;
+        }
+      } else {
+        merged.push(Object.assign({}, iv));
+      }
+    }
+
+    // Resolve the earliest free start ≥ now (push past any interval covering now)
+    // and remember the location/trip we came off.
+    let freeStart = now;
+    let freeLocation = null;
+    let lastPastEnd = -Infinity;
+    let source = null;
+    for (const b of merged) {
+      if (b.end <= now && b.end > lastPastEnd) { lastPastEnd = b.end; freeLocation = b.endLocation; source = b; }
+      if (b.start <= freeStart && freeStart <= b.end) { freeStart = b.end; freeLocation = b.endLocation; source = b; }
+    }
+    // The next booked interval after freeStart bounds the free window.
+    let nextTripStart = null;
+    for (const b of merged) {
+      if (b.start > freeStart) { nextTripStart = b.start; break; }
+    }
+
+    out.push({
+      driver: rec.driver,
+      lastTripId: source ? source.tripId : null,
+      lastTripState: source ? source.state : null,
+      lastTripEndTime: source ? new Date(source.end).toISOString() : null,
+      freeLocation: freeLocation,
+      domicile: source ? source.domicile : null,
+      equipment: source ? source.equipment : null,
+      freeAt: freeStart > now ? new Date(freeStart).toISOString() : null,
+      freeAtEffective: new Date(freeStart).toISOString(),
+      alreadyFree: !(freeStart > now),
+      nextTripStart: nextTripStart != null ? new Date(nextTripStart).toISOString() : null,
+      freeWindowHours: nextTripStart != null ? r2((nextTripStart - freeStart) / HOUR_MS) : null,
+    });
   }
   out.sort((x, y) => Date.parse(x.freeAtEffective) - Date.parse(y.freeAtEffective));
   return out;
@@ -1156,7 +1213,9 @@ function ratePerMile(wo) {
 function planLoadsForDriver(avail, response) {
   const freeMs = Date.parse(avail.freeAtEffective);
   const lower = freeMs + 2 * HOUR_MS;
-  const upper = freeMs + 48 * HOUR_MS;
+  let upper = freeMs + 48 * HOUR_MS;
+  const nextMs = avail.nextTripStart ? Date.parse(avail.nextTripStart) : null;
+  if (nextMs != null && !isNaN(nextMs) && nextMs < upper) upper = nextMs; // can't start after next commitment
   const wos = response && Array.isArray(response.workOpportunities) ? response.workOpportunities : [];
 
   let droppedForTiming = 0;
@@ -1164,6 +1223,11 @@ function planLoadsForDriver(avail, response) {
   for (const wo of wos) {
     const pk = wo.firstPickupTime ? Date.parse(wo.firstPickupTime) : NaN;
     if (isNaN(pk) || pk < lower || pk > upper) { droppedForTiming++; continue; }
+    // Must deliver before the driver's next booked trip (fit inside the gap).
+    if (nextMs != null && !isNaN(nextMs) && wo.lastDeliveryTime) {
+      const del = Date.parse(wo.lastDeliveryTime);
+      if (!isNaN(del) && del > nextMs) { droppedForTiming++; continue; }
+    }
     feasible.push({ wo: wo, pk: pk });
   }
 
@@ -1273,13 +1337,25 @@ async function runPlanner() {
         },
         availableFrom: a.freeAtEffective,
         alreadyFree: a.alreadyFree,
+        nextTripStart: a.nextTripStart,
+        freeWindowHours: a.freeWindowHours,
         earliestPickupAllowed: new Date(Date.parse(a.freeAtEffective) + 2 * HOUR_MS).toISOString(),
-        latestPickupAllowed: new Date(Date.parse(a.freeAtEffective) + 48 * HOUR_MS).toISOString(),
+        latestPickupAllowed: (function () {
+          let u = Date.parse(a.freeAtEffective) + 48 * HOUR_MS;
+          if (a.nextTripStart) {
+            const n = Date.parse(a.nextTripStart);
+            if (!isNaN(n) && n < u) u = n;
+          }
+          return new Date(u).toISOString();
+        })(),
       };
 
       if (fl.latitude == null || fl.longitude == null || !fl.city) {
-        results.push(Object.assign(baseRec, { recommended: null, alternatives: [], note: "No usable drop-off location in trip data" }));
-        await log("planner", i + 1 + "/" + availability.length + " " + a.driver.name + ": no usable drop-off — skipped", "warn");
+        const note = !a.lastTripId
+          ? "Unknown current location — driver has only future trips"
+          : "Drop-off location has no coordinates";
+        results.push(Object.assign(baseRec, { recommended: null, alternatives: [], note: note }));
+        await log("planner", i + 1 + "/" + availability.length + " " + a.driver.name + ": " + note + " — skipped", "warn");
         await chrome.storage.local.set({ plannerResults: results });
         continue;
       }
