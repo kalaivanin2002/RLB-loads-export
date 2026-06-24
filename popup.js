@@ -16,7 +16,6 @@
     minTripMiles: 25,
     topLoads: 30,
     restHours: 0,
-    prepBufferHours: 2,
     maxWaitHours: 48,
     gapBeforeNextHours: 2,
     weightPayout: 0.4,
@@ -47,7 +46,6 @@
     minTripMiles: $("minTripMiles"),
     topLoads: $("topLoads"),
     restHours: $("restHours"),
-    prepBufferHours: $("prepBufferHours"),
     maxWaitHours: $("maxWaitHours"),
     gapBeforeNextHours: $("gapBeforeNextHours"),
     weightPayout: $("weightPayout"),
@@ -101,7 +99,6 @@
       els.minTripMiles.value = cfg.minTripMiles;
       els.topLoads.value = cfg.topLoads;
       els.restHours.value = cfg.restHours;
-      els.prepBufferHours.value = cfg.prepBufferHours;
       els.maxWaitHours.value = cfg.maxWaitHours;
       els.gapBeforeNextHours.value = cfg.gapBeforeNextHours;
       els.weightPayout.value = cfg.weightPayout;
@@ -152,7 +149,6 @@
       minTripMiles: Math.max(0, parseInt(els.minTripMiles.value, 10) || DEFAULTS.minTripMiles),
       topLoads: Math.max(1, parseInt(els.topLoads.value, 10) || DEFAULTS.topLoads),
       restHours: numField(els.restHours, DEFAULTS.restHours),
-      prepBufferHours: numField(els.prepBufferHours, DEFAULTS.prepBufferHours),
       maxWaitHours: numField(els.maxWaitHours, DEFAULTS.maxWaitHours),
       gapBeforeNextHours: numField(els.gapBeforeNextHours, DEFAULTS.gapBeforeNextHours),
       weightPayout: numField(els.weightPayout, DEFAULTS.weightPayout),
