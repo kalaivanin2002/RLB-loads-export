@@ -1024,6 +1024,9 @@ function freshenDates(payload) {
   (function walk(o) {
     if (Array.isArray(o)) return o.forEach(walk);
     if (o && typeof o === "object") {
+      // Raise the page size so trips can't be truncated (the captured payload
+      // caps at 100, which silently drops trips for larger fleets).
+      if (o.pagination && typeof o.pagination === "object") o.pagination.size = 1000;
       for (const k of Object.keys(o)) {
         if (k === "lte" && typeof o[k] === "string") o[k] = lte;
         else if (k === "gte" && typeof o[k] === "string") o[k] = gte;
@@ -1438,6 +1441,20 @@ async function runPlanner() {
     const availability = buildAvailability(inTransit.concat(upcoming), cfg);
     await chrome.storage.local.set({ plannerAvailability: availability, plannerResults: [] });
     await log("planner", "Built availability for " + availability.length + " driver(s). Searching loads…", "success");
+
+    // Diagnostic: show how each driver's free time was derived, so a wrong
+    // "free now" (e.g. in-transit end time not applied) is obvious in the log.
+    for (const a of availability) {
+      await log(
+        "planner",
+        "  · " + a.driver.name +
+          ": lastTripEnd=" + (a.lastTripEndTime || "—") +
+          ", freeAt=" + a.freeAtEffective +
+          (a.alreadyFree ? " (already free)" : "") +
+          ", nextTrip=" + (a.nextTripStart || "—"),
+        "info"
+      );
+    }
 
     const base = Math.max(0, Number(cfg.delayMs) || 300);
     const results = [];

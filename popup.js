@@ -227,14 +227,19 @@
       s == null
         ? ""
         : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    // Always render in UK time so it matches Relay regardless of the PC's timezone.
     const dt = (iso) => {
       if (!iso) return "—";
       const d = new Date(iso);
       if (isNaN(d)) return esc(iso);
-      return d.toLocaleString(undefined, { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+      return d.toLocaleString("en-GB", {
+        weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+        timeZone: "Europe/London",
+      });
     };
     const n1 = (v) => (v == null || isNaN(v) ? "—" : (Math.round(v * 10) / 10).toLocaleString());
-    const money = (v, unit) => (v == null ? "—" : (unit === "USD" ? "$" : "£") + Number(v).toLocaleString());
+    const money = (v, unit) =>
+      v == null ? "—" : (unit === "USD" ? "$" : "£") + (Math.round(Number(v) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
     const matched = (byDriver || []).filter((d) => d && d.recommended).length;
     const unmatched = (byDriver || []).filter((d) => d && !d.recommended);
@@ -264,7 +269,7 @@
           '<span class="pay">' + money(l.payout, l.payoutUnit) + "</span>" +
           "</div>" +
           '<div class="load-meta">' +
-          "<span>" + n1(l.ratePerMile) + " /mi</span>" +
+          "<span>£" + n1(l.ratePerMile) + "/mi</span>" +
           "<span>" + n1(l.tripMiles) + " mi</span>" +
           "<span>" + esc(l.equipment || "—") + "</span>" +
           "<span>Pickup " + dt(l.pickup && l.pickup.time) + "</span>" +
