@@ -32,7 +32,6 @@ const DEFAULTS = {
   topLoads: 30,
   // Planner timing rules (hours).
   restHours: 0, // rest after finishing a trip before the driver is available
-  prepBufferHours: 2, // earliest pickup = free + this
   maxWaitHours: 48, // latest pickup = free + this
   gapBeforeNextHours: 2, // load must deliver this long before the next booked trip
   // Planner scoring weights (relative; need not sum to 1).
@@ -1255,10 +1254,9 @@ function haversineMiles(lat1, lon1, lat2, lon2) {
 // feasibility window (free+2h … free+48h, fits before next trip). Then score.
 function planLoadsForDriver(avail, response, cfg) {
   const freeMs = Date.parse(avail.freeAtEffective);
-  const prepH = numOr(cfg && cfg.prepBufferHours, 2);
   const maxWaitH = numOr(cfg && cfg.maxWaitHours, 48);
   const gapBeforeNextH = numOr(cfg && cfg.gapBeforeNextHours, 0);
-  const lower = freeMs + prepH * HOUR_MS;
+  const lower = freeMs;
   let upper = freeMs + maxWaitH * HOUR_MS;
   // The next booked trip, minus the required gap before it, is the hard deadline.
   let effNext = null;
@@ -1477,7 +1475,7 @@ async function runPlanner() {
         alreadyFree: a.alreadyFree,
         nextTripStart: a.nextTripStart,
         freeWindowHours: a.freeWindowHours,
-        earliestPickupAllowed: new Date(Date.parse(a.freeAtEffective) + numOr(cfg.prepBufferHours, 2) * HOUR_MS).toISOString(),
+        earliestPickupAllowed: new Date(Date.parse(a.freeAtEffective)).toISOString(),
         latestPickupAllowed: (function () {
           let u = Date.parse(a.freeAtEffective) + numOr(cfg.maxWaitHours, 48) * HOUR_MS;
           if (a.nextTripStart) {
