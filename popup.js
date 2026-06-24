@@ -9,15 +9,30 @@
     letters: "abcdefghijklmnopqrstuvwxyz",
     prefix: ", ",
     delayMs: 500,
-    searchRadius: 5,
+    searchRadius: 50,
+    nearbyRadius: 10,
     resultSize: 50,
     maxLocations: 2,
+    minTripMiles: 25,
+    topLoads: 30,
+    restHours: 0,
+    prepBufferHours: 2,
+    maxWaitHours: 48,
+    gapBeforeNextHours: 2,
+    weightPayout: 0.4,
+    weightRate: 0.25,
+    weightDeadhead: 0.2,
+    weightTiming: 0.15,
   };
 
   const $ = (id) => document.getElementById(id);
   const els = {
-    toggle: $("toggleSettings"),
-    settings: $("settings"),
+    toggleAdmin: $("toggleAdmin"),
+    toggleDev: $("toggleDev"),
+    adminSettings: $("adminSettings"),
+    devSettings: $("devSettings"),
+    toggleTools: $("toggleTools"),
+    moreTools: $("moreTools"),
     ontrackUrl: $("ontrackUrl"),
     ingestUrl: $("ingestUrl"),
     token: $("token"),
@@ -26,9 +41,21 @@
     letters: $("letters"),
     delayMs: $("delayMs"),
     searchRadius: $("searchRadius"),
+    nearbyRadius: $("nearbyRadius"),
     resultSize: $("resultSize"),
     maxLocations: $("maxLocations"),
-    save: $("saveSettings"),
+    minTripMiles: $("minTripMiles"),
+    topLoads: $("topLoads"),
+    restHours: $("restHours"),
+    prepBufferHours: $("prepBufferHours"),
+    maxWaitHours: $("maxWaitHours"),
+    gapBeforeNextHours: $("gapBeforeNextHours"),
+    weightPayout: $("weightPayout"),
+    weightRate: $("weightRate"),
+    weightDeadhead: $("weightDeadhead"),
+    weightTiming: $("weightTiming"),
+    saveAdmin: $("saveAdmin"),
+    saveDev: $("saveDev"),
     sync: $("syncBtn"),
     syncLog: $("syncLog"),
     findLoads: $("findLoadsBtn"),
@@ -44,6 +71,7 @@
     tripsLog: $("tripsLog"),
     plan: $("planBtn"),
     downloadPlan: $("downloadPlanBtn"),
+    downloadReport: $("downloadReportBtn"),
     plannerProgress: $("plannerProgress"),
     plannerLog: $("plannerLog"),
   };
@@ -53,7 +81,7 @@
     harvest: { btn: els.sync, logEl: els.syncLog, idle: "Sync RLB Locations (a–z)", busy: "Syncing…" },
     loads: { btn: els.findLoads, logEl: els.loadsLog, idle: "Find Loads (all locations)", busy: "Finding loads…" },
     trips: { btn: els.syncTrips, logEl: els.tripsLog, idle: "Sync In-Transit Trips", busy: "Syncing trips…" },
-    planner: { btn: els.plan, logEl: els.plannerLog, idle: "Plan Loads", busy: "Planning…" },
+    planner: { btn: els.plan, logEl: els.plannerLog, idle: "Fetch Loads", busy: "Fetching…" },
   };
 
   function loadSettings() {
@@ -67,16 +95,45 @@
       els.letters.value = cfg.letters;
       els.delayMs.value = cfg.delayMs;
       els.searchRadius.value = cfg.searchRadius;
+      els.nearbyRadius.value = cfg.nearbyRadius;
       els.resultSize.value = cfg.resultSize;
       els.maxLocations.value = cfg.maxLocations;
+      els.minTripMiles.value = cfg.minTripMiles;
+      els.topLoads.value = cfg.topLoads;
+      els.restHours.value = cfg.restHours;
+      els.prepBufferHours.value = cfg.prepBufferHours;
+      els.maxWaitHours.value = cfg.maxWaitHours;
+      els.gapBeforeNextHours.value = cfg.gapBeforeNextHours;
+      els.weightPayout.value = cfg.weightPayout;
+      els.weightRate.value = cfg.weightRate;
+      els.weightDeadhead.value = cfg.weightDeadhead;
+      els.weightTiming.value = cfg.weightTiming;
     });
   }
 
-  els.toggle.addEventListener("click", () => {
-    els.settings.classList.toggle("hidden");
+  // Admin (header) and Dev (inside More tools) toggle independently.
+  els.toggleAdmin.addEventListener("click", () => {
+    els.adminSettings.classList.toggle("hidden");
+  });
+  els.toggleDev.addEventListener("click", () => {
+    const open = els.devSettings.classList.toggle("hidden") === false;
+    els.toggleDev.textContent = open ? "Developer settings ▴" : "Developer settings ▾";
   });
 
-  els.save.addEventListener("click", () => {
+  // "More tools" disclosure for the secondary cards.
+  els.toggleTools.addEventListener("click", () => {
+    const open = els.moreTools.classList.toggle("hidden") === false;
+    els.toggleTools.textContent = open ? "More tools ▴" : "More tools ▾";
+  });
+
+  // Read a non-negative number from a field, allowing 0 and decimals.
+  const numField = (el, dflt) => {
+    const v = parseFloat(el.value);
+    return isNaN(v) ? dflt : Math.max(0, v);
+  };
+
+  // Both Save buttons persist the full settings object (all fields, both tabs).
+  function saveSettings() {
     const cfg = {
       ontrackUrl: els.ontrackUrl.value.trim() || DEFAULTS.ontrackUrl,
       ingestUrl: els.ingestUrl.value.trim() || DEFAULTS.ingestUrl,
@@ -86,16 +143,30 @@
       letters: els.letters.value.trim() || DEFAULTS.letters,
       delayMs: Math.max(0, parseInt(els.delayMs.value, 10) || DEFAULTS.delayMs),
       searchRadius: Math.max(0, parseInt(els.searchRadius.value, 10) || DEFAULTS.searchRadius),
+      nearbyRadius: Math.max(0, parseInt(els.nearbyRadius.value, 10) || DEFAULTS.nearbyRadius),
       resultSize: Math.max(1, parseInt(els.resultSize.value, 10) || DEFAULTS.resultSize),
       maxLocations: (() => {
         const v = parseInt(els.maxLocations.value, 10);
         return isNaN(v) ? DEFAULTS.maxLocations : Math.max(0, v);
       })(),
+      minTripMiles: Math.max(0, parseInt(els.minTripMiles.value, 10) || DEFAULTS.minTripMiles),
+      topLoads: Math.max(1, parseInt(els.topLoads.value, 10) || DEFAULTS.topLoads),
+      restHours: numField(els.restHours, DEFAULTS.restHours),
+      prepBufferHours: numField(els.prepBufferHours, DEFAULTS.prepBufferHours),
+      maxWaitHours: numField(els.maxWaitHours, DEFAULTS.maxWaitHours),
+      gapBeforeNextHours: numField(els.gapBeforeNextHours, DEFAULTS.gapBeforeNextHours),
+      weightPayout: numField(els.weightPayout, DEFAULTS.weightPayout),
+      weightRate: numField(els.weightRate, DEFAULTS.weightRate),
+      weightDeadhead: numField(els.weightDeadhead, DEFAULTS.weightDeadhead),
+      weightTiming: numField(els.weightTiming, DEFAULTS.weightTiming),
     };
     chrome.storage.local.set(cfg, () =>
       appendLog("harvest", { msg: "Settings saved.", level: "success", ts: Date.now() })
     );
-  });
+  }
+
+  els.saveAdmin.addEventListener("click", saveSettings);
+  els.saveDev.addEventListener("click", saveSettings);
 
   els.sync.addEventListener("click", () => start("harvest", "start-harvest"));
   els.findLoads.addEventListener("click", () => start("loads", "start-find-loads"));
@@ -109,12 +180,18 @@
   els.plan.addEventListener("click", () => start("planner", "start-planner"));
 
   els.downloadPlan.addEventListener("click", () => {
-    chrome.storage.local.get(["plannerResults", "plannerAvailability"], (r) => {
-      const data = r.plannerResults && r.plannerResults.length ? r.plannerResults : r.plannerAvailability || [];
-      if (!data.length) {
+    chrome.storage.local.get(["plannerTopLoads", "plannerResults", "plannerAvailability"], (r) => {
+      const topLoads = r.plannerTopLoads || [];
+      const byDriver = r.plannerResults && r.plannerResults.length ? r.plannerResults : r.plannerAvailability || [];
+      if (!topLoads.length && !byDriver.length) {
         appendLog("planner", { msg: "Nothing to download yet.", level: "warn", ts: Date.now() });
         return;
       }
+      const data = {
+        generatedAt: new Date().toISOString(),
+        topLoads: topLoads,
+        byDriver: byDriver,
+      };
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -124,6 +201,127 @@
       URL.revokeObjectURL(url);
     });
   });
+
+  els.downloadReport.addEventListener("click", () => {
+    chrome.storage.local.get(["plannerTopLoads", "plannerResults", "plannerAvailability"], (r) => {
+      const topLoads = r.plannerTopLoads || [];
+      const byDriver = r.plannerResults && r.plannerResults.length ? r.plannerResults : r.plannerAvailability || [];
+      if (!topLoads.length && !byDriver.length) {
+        appendLog("planner", { msg: "Nothing to download yet.", level: "warn", ts: Date.now() });
+        return;
+      }
+      const html = buildPlanReport(topLoads, byDriver);
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "rlb-plan-" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".html";
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  });
+
+  // ── HTML report builder ────────────────────────────────────────────────────
+  function buildPlanReport(topLoads, byDriver) {
+    const esc = (s) =>
+      s == null
+        ? ""
+        : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const dt = (iso) => {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      if (isNaN(d)) return esc(iso);
+      return d.toLocaleString(undefined, { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+    };
+    const n1 = (v) => (v == null || isNaN(v) ? "—" : (Math.round(v * 10) / 10).toLocaleString());
+    const money = (v, unit) => (v == null ? "—" : (unit === "USD" ? "$" : "£") + Number(v).toLocaleString());
+
+    const matched = (byDriver || []).filter((d) => d && d.recommended).length;
+    const unmatched = (byDriver || []).filter((d) => d && !d.recommended);
+
+    const loadCards = (topLoads || [])
+      .map((l, i) => {
+        const drivers = (l.suitableDrivers || [])
+          .map((d, di) => {
+            const name = d.driver && d.driver.name ? d.driver.name : "(unknown)";
+            return (
+              '<tr class="' + (di === 0 ? "best" : "") + '">' +
+              "<td>" + esc(name) + (di === 0 ? ' <span class="tag">best fit</span>' : "") + "</td>" +
+              "<td>" + dt(d.availableFrom) + "</td>" +
+              "<td>" + esc(d.currentDropoff || "—") + "</td>" +
+              "<td>" + n1(d.deadheadMiles) + " mi</td>" +
+              "<td>" + n1(d.pickupGapHours) + " h</td>" +
+              "<td>" + n1(d.fitScore != null ? d.fitScore * 100 : null) + "</td>" +
+              "</tr>"
+            );
+          })
+          .join("");
+        return (
+          '<section class="load">' +
+          '<div class="load-head">' +
+          '<span class="rank">#' + (i + 1) + "</span>" +
+          '<span class="route">' + esc(l.pickup && l.pickup.city) + ' <span class="arrow">→</span> ' + esc(l.dropoff && l.dropoff.city) + "</span>" +
+          '<span class="pay">' + money(l.payout, l.payoutUnit) + "</span>" +
+          "</div>" +
+          '<div class="load-meta">' +
+          "<span>" + n1(l.ratePerMile) + " /mi</span>" +
+          "<span>" + n1(l.tripMiles) + " mi</span>" +
+          "<span>" + esc(l.equipment || "—") + "</span>" +
+          "<span>Pickup " + dt(l.pickup && l.pickup.time) + "</span>" +
+          "<span>Deliver " + dt(l.dropoff && l.dropoff.time) + "</span>" +
+          '<span class="dc">' + (l.driverCount || (l.suitableDrivers || []).length) + " suitable driver(s)</span>" +
+          "</div>" +
+          '<table class="drivers"><thead><tr><th>Driver</th><th>Free from</th><th>Currently at</th><th>Deadhead</th><th>Pickup gap</th><th>Fit</th></tr></thead><tbody>' +
+          (drivers || '<tr><td colspan="6">No drivers.</td></tr>') +
+          "</tbody></table>" +
+          "</section>"
+        );
+      })
+      .join("");
+
+    const unmatchedRows = unmatched
+      .map((d) => {
+        const name = d.driver && d.driver.name ? d.driver.name : "(unknown)";
+        const reason = d.note || d.error || "No feasible load in window/radius";
+        return "<tr><td>" + esc(name) + "</td><td>" + dt(d.availableFrom) + "</td><td>" + esc(reason) + "</td></tr>";
+      })
+      .join("");
+
+    const unmatchedSection = unmatched.length
+      ? '<h2>Drivers with no load (' + unmatched.length + ")</h2>" +
+        '<table class="unmatched"><thead><tr><th>Driver</th><th>Free from</th><th>Reason</th></tr></thead><tbody>' +
+        unmatchedRows +
+        "</tbody></table>"
+      : "";
+
+    return (
+      "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">" +
+      "<title>RLB Load Plan</title><style>" +
+      "body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#f5f7fa;color:#1e293b;margin:0;padding:24px;}" +
+      "h1{font-size:22px;margin:0 0 4px;}h2{font-size:16px;margin:28px 0 10px;}" +
+      ".meta{color:#64748b;font-size:13px;margin:0 0 20px;}" +
+      ".load{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:14px;}" +
+      ".load-head{display:flex;align-items:center;gap:12px;}" +
+      ".rank{background:#1e293b;color:#fff;font-weight:700;font-size:12px;border-radius:6px;padding:2px 8px;}" +
+      ".route{font-size:16px;font-weight:700;flex:1;}.arrow{color:#94a3b8;}" +
+      ".pay{font-size:18px;font-weight:700;color:#16a34a;}" +
+      ".load-meta{display:flex;flex-wrap:wrap;gap:8px 14px;margin:8px 0 12px;font-size:12px;color:#475569;}" +
+      ".load-meta .dc{margin-left:auto;font-weight:600;color:#2563eb;}" +
+      "table{width:100%;border-collapse:collapse;font-size:12px;}" +
+      "th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #eef2f7;}" +
+      "th{color:#64748b;font-weight:600;background:#f8fafc;}" +
+      "tr.best td{background:#ecfdf5;}" +
+      ".tag{background:#16a34a;color:#fff;font-size:10px;border-radius:4px;padding:1px 5px;margin-left:4px;}" +
+      ".unmatched td{color:#475569;}" +
+      "</style></head><body>" +
+      "<h1>RLB Load Plan</h1>" +
+      '<p class="meta">Generated ' + esc(new Date().toLocaleString()) + " · " + (topLoads || []).length +
+      " top loads · " + matched + " driver(s) with a match</p>" +
+      (loadCards || "<p>No loads found.</p>") +
+      unmatchedSection +
+      "</body></html>"
+    );
+  }
 
   function send(messageType) {
     chrome.runtime.sendMessage({ type: messageType }, () => {
@@ -258,16 +456,21 @@
 
   // Reflect the planner job state.
   function refreshPlannerUi() {
-    chrome.storage.local.get(["plannerRunning", "plannerResults", "plannerAvailability"], (r) => {
+    chrome.storage.local.get(["plannerRunning", "plannerResults", "plannerAvailability", "plannerTopLoads"], (r) => {
       const running = r.plannerRunning === true;
       const resCount = (r.plannerResults || []).length;
       const availCount = (r.plannerAvailability || []).length;
+      const topCount = (r.plannerTopLoads || []).length;
       const withRec = (r.plannerResults || []).filter((x) => x && x.recommended).length;
       els.plan.disabled = running;
-      els.plan.textContent = running ? "Planning…" : "Plan Loads";
-      els.downloadPlan.disabled = resCount === 0 && availCount === 0;
+      els.plan.textContent = running ? "Fetching…" : "Fetch Loads";
+      const nothing = topCount === 0 && resCount === 0 && availCount === 0;
+      els.downloadPlan.disabled = nothing;
+      els.downloadReport.disabled = nothing;
       els.plannerProgress.textContent = running
         ? "Planning… (" + resCount + "/" + availCount + ")"
+        : topCount > 0
+        ? topCount + " top load(s) · " + withRec + "/" + resCount + " driver(s) matched"
         : resCount > 0
         ? withRec + "/" + resCount + " driver(s) have a load"
         : availCount > 0
@@ -277,7 +480,7 @@
   }
 
   chrome.storage.onChanged.addListener((changes) => {
-    if (changes.plannerRunning || changes.plannerResults || changes.plannerAvailability) {
+    if (changes.plannerRunning || changes.plannerResults || changes.plannerAvailability || changes.plannerTopLoads) {
       refreshPlannerUi();
     }
   });

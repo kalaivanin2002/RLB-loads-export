@@ -24,9 +24,22 @@ const DEFAULTS = {
   letters: "abcdefghijklmnopqrstuvwxyz",
   prefix: ", ",
   delayMs: 500,
-  searchRadius: 5,
+  searchRadius: 50,
+  nearbyRadius: 10,
   resultSize: 50,
   maxLocations: 2,
+  minTripMiles: 25,
+  topLoads: 30,
+  // Planner timing rules (hours).
+  restHours: 0, // rest after finishing a trip before the driver is available
+  prepBufferHours: 2, // earliest pickup = free + this
+  maxWaitHours: 48, // latest pickup = free + this
+  gapBeforeNextHours: 2, // load must deliver this long before the next booked trip
+  // Planner scoring weights (relative; need not sum to 1).
+  weightPayout: 0.4,
+  weightRate: 0.25,
+  weightDeadhead: 0.2,
+  weightTiming: 0.15,
 };
 
 function getConfig() {
@@ -39,6 +52,12 @@ function getConfig() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
+// Numeric config value with a fallback when blank/invalid (allows 0).
+const numOr = (v, d) => {
+  if (v === null || v === undefined || v === "") return d;
+  const n = Number(v);
+  return isNaN(n) ? d : n;
+};
 
 // ── progress reporting (per job) ─────────────────────────────────────────────
 // Persisted to storage (so the popup can show it after being reopened) and also
@@ -1115,8 +1134,9 @@ async function fetchEntities(tabId, cfg, csrf, payload) {
 // are busy intervals; we find the earliest point from now where they're not
 // booked, plus where that free window ends (the next trip's start). A load must
 // fit inside that window.
-function buildAvailability(entities) {
+function buildAvailability(entities, cfg) {
   const now = Date.now();
+  const restMs = numOr(cfg && cfg.restHours, 0) * HOUR_MS;
   const byDriver = {};
   for (const e of entities) {
     if (!e.drivers || !e.drivers.length) continue; // unassigned capacity block
@@ -1177,6 +1197,9 @@ function buildAvailability(entities) {
       if (b.start > freeStart) { nextTripStart = b.start; break; }
     }
 
+    // Apply mandatory rest after finishing a trip (only if they came off one).
+    const effFreeStart = source ? freeStart + restMs : freeStart;
+
     out.push({
       driver: rec.driver,
       lastTripId: source ? source.tripId : null,
@@ -1185,11 +1208,11 @@ function buildAvailability(entities) {
       freeLocation: freeLocation,
       domicile: source ? source.domicile : null,
       equipment: source ? source.equipment : null,
-      freeAt: freeStart > now ? new Date(freeStart).toISOString() : null,
-      freeAtEffective: new Date(freeStart).toISOString(),
-      alreadyFree: !(freeStart > now),
+      freeAt: effFreeStart > now ? new Date(effFreeStart).toISOString() : null,
+      freeAtEffective: new Date(effFreeStart).toISOString(),
+      alreadyFree: !(effFreeStart > now),
       nextTripStart: nextTripStart != null ? new Date(nextTripStart).toISOString() : null,
-      freeWindowHours: nextTripStart != null ? r2((nextTripStart - freeStart) / HOUR_MS) : null,
+      freeWindowHours: nextTripStart != null ? r2((nextTripStart - effFreeStart) / HOUR_MS) : null,
     });
   }
   out.sort((x, y) => Date.parse(x.freeAtEffective) - Date.parse(y.freeAtEffective));
@@ -1198,7 +1221,9 @@ function buildAvailability(entities) {
 
 // Default scoring weights. Components are emitted in the output so ranking is
 // transparent and tunable — adjust here (or we can expose them in settings).
-const PLANNER_WEIGHTS = { rate: 0.5, deadhead: 0.3, timing: 0.2 };
+// payout = total £ of the run (favours big jobs over tiny shuttles);
+// rate = £/mile; deadhead = empty miles to pickup; timing = how soon it starts.
+const PLANNER_WEIGHTS = { payout: 0.4, rate: 0.25, deadhead: 0.2, timing: 0.15 };
 const HOUR_MS = 3600000;
 const r2 = (x) => Math.round(x * 100) / 100;
 const r3 = (x) => Math.round(x * 1000) / 1000;
@@ -1209,48 +1234,93 @@ function ratePerMile(wo) {
   return p && d ? p / d : 0;
 }
 
-// Filter loads to the feasibility window (free+2h … free+48h) and score them.
-function planLoadsForDriver(avail, response) {
+// Straight-line (great-circle) distance in miles between two lat/lng points.
+function haversineMiles(lat1, lon1, lat2, lon2) {
+  if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return null;
+  const R = 3958.7613;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Filter loads to (a) within the precise nearby radius of the driver's drop-off
+// (computed from lat/lng — the search net is wide, e.g. 50mi), and (b) the
+// feasibility window (free+2h … free+48h, fits before next trip). Then score.
+function planLoadsForDriver(avail, response, cfg) {
   const freeMs = Date.parse(avail.freeAtEffective);
-  const lower = freeMs + 2 * HOUR_MS;
-  let upper = freeMs + 48 * HOUR_MS;
-  const nextMs = avail.nextTripStart ? Date.parse(avail.nextTripStart) : null;
-  if (nextMs != null && !isNaN(nextMs) && nextMs < upper) upper = nextMs; // can't start after next commitment
+  const prepH = numOr(cfg && cfg.prepBufferHours, 2);
+  const maxWaitH = numOr(cfg && cfg.maxWaitHours, 48);
+  const gapBeforeNextH = numOr(cfg && cfg.gapBeforeNextHours, 0);
+  const lower = freeMs + prepH * HOUR_MS;
+  let upper = freeMs + maxWaitH * HOUR_MS;
+  // The next booked trip, minus the required gap before it, is the hard deadline.
+  let effNext = null;
+  if (avail.nextTripStart) {
+    const n = Date.parse(avail.nextTripStart);
+    if (!isNaN(n)) effNext = n - gapBeforeNextH * HOUR_MS;
+  }
+  if (effNext != null && effNext < upper) upper = effNext; // can't start after next commitment
   const wos = response && Array.isArray(response.workOpportunities) ? response.workOpportunities : [];
 
+  const fl = avail.freeLocation || {};
+  const dropLat = fl.latitude != null ? fl.latitude : null;
+  const dropLng = fl.longitude != null ? fl.longitude : null;
+  const nearby = Number(cfg && cfg.nearbyRadius) || 10;
+  const minTrip = Number(cfg && cfg.minTripMiles) || 0;
+
   let droppedForTiming = 0;
+  let droppedForDistance = 0;
+  let droppedForShort = 0;
   const feasible = [];
   for (const wo of wos) {
     const pk = wo.firstPickupTime ? Date.parse(wo.firstPickupTime) : NaN;
     if (isNaN(pk) || pk < lower || pk > upper) { droppedForTiming++; continue; }
-    // Must deliver before the driver's next booked trip (fit inside the gap).
-    if (nextMs != null && !isNaN(nextMs) && wo.lastDeliveryTime) {
+    // Must deliver before the next booked trip (minus the required gap).
+    if (effNext != null && wo.lastDeliveryTime) {
       const del = Date.parse(wo.lastDeliveryTime);
-      if (!isNaN(del) && del > nextMs) { droppedForTiming++; continue; }
+      if (!isNaN(del) && del > effNext) { droppedForTiming++; continue; }
     }
-    feasible.push({ wo: wo, pk: pk });
+    // Skip tiny shuttle runs — they look great on £/mile but earn almost nothing.
+    const tripMi = wo.totalDistance && wo.totalDistance.value;
+    if (minTrip > 0 && tripMi != null && tripMi < minTrip) { droppedForShort++; continue; }
+    // Precise nearby filter: drop-off → load pickup straight-line distance.
+    const sl = wo.startLocation || {};
+    const computedDh = haversineMiles(dropLat, dropLng, sl.latitude, sl.longitude);
+    if (computedDh != null && computedDh > nearby) { droppedForDistance++; continue; }
+    feasible.push({ wo: wo, pk: pk, computedDh: computedDh });
   }
 
   const enriched = feasible.map((f) => {
     const rpm = ratePerMile(f.wo);
-    const dh = f.wo.deadhead && f.wo.deadhead.value != null ? f.wo.deadhead.value : null;
+    const amazonDh = f.wo.deadhead && f.wo.deadhead.value != null ? f.wo.deadhead.value : null;
+    const dh = f.computedDh != null ? f.computedDh : amazonDh; // prefer our computed deadhead
     const gapH = (f.pk - lower) / HOUR_MS;
-    return { wo: f.wo, rpm: rpm, dh: dh, gapH: gapH };
+    const payout = (f.wo.payout && f.wo.payout.value) || 0;
+    return { wo: f.wo, rpm: rpm, dh: dh, amazonDh: amazonDh, gapH: gapH, payout: payout };
   });
 
   const maxRpm = Math.max(1e-9, ...enriched.map((e) => e.rpm));
+  const maxPayout = Math.max(1e-9, ...enriched.map((e) => e.payout));
   const dhVals = enriched.map((e) => e.dh).filter((v) => v != null);
   const maxDh = dhVals.length ? Math.max(...dhVals) : 0;
   const windowH = (upper - lower) / HOUR_MS;
 
+  const W = {
+    payout: numOr(cfg && cfg.weightPayout, PLANNER_WEIGHTS.payout),
+    rate: numOr(cfg && cfg.weightRate, PLANNER_WEIGHTS.rate),
+    deadhead: numOr(cfg && cfg.weightDeadhead, PLANNER_WEIGHTS.deadhead),
+    timing: numOr(cfg && cfg.weightTiming, PLANNER_WEIGHTS.timing),
+  };
   for (const e of enriched) {
+    const payoutScore = e.payout / maxPayout;
     const rateScore = e.rpm / maxRpm;
     const dhScore = e.dh == null || maxDh === 0 ? 0.5 : 1 - e.dh / maxDh;
     const timingScore = windowH > 0 ? 1 - e.gapH / windowH : 0.5;
-    e.score =
-      PLANNER_WEIGHTS.rate * rateScore +
-      PLANNER_WEIGHTS.deadhead * dhScore +
-      PLANNER_WEIGHTS.timing * timingScore;
+    e.score = W.payout * payoutScore + W.rate * rateScore + W.deadhead * dhScore + W.timing * timingScore;
   }
   enriched.sort((a, b) => b.score - a.score);
 
@@ -1267,7 +1337,8 @@ function planLoadsForDriver(avail, response) {
         time: e.wo.firstPickupTime || null,
       },
       dropoff: { city: el.city || null, domicile: el.domicile || null, time: e.wo.lastDeliveryTime || null },
-      deadheadMiles: e.dh,
+      deadheadMiles: e.dh != null ? r2(e.dh) : null,
+      amazonDeadheadMiles: e.amazonDh != null ? r2(e.amazonDh) : null,
       tripMiles: e.wo.totalDistance && e.wo.totalDistance.value,
       payout: e.wo.payout && e.wo.payout.value,
       payoutUnit: (e.wo.payout && e.wo.payout.unit) || null,
@@ -1275,17 +1346,67 @@ function planLoadsForDriver(avail, response) {
       equipment: (e.wo.loads && e.wo.loads[0] && e.wo.loads[0].equipmentType) || null,
       workType: e.wo.workOpportunityType || null,
       score: r3(e.score),
-      components: { ratePerMile: r2(e.rpm), deadheadMiles: e.dh, pickupGapHours: r2(e.gapH) },
+      components: { ratePerMile: r2(e.rpm), deadheadMiles: e.dh != null ? r2(e.dh) : null, pickupGapHours: r2(e.gapH) },
     };
   }
 
   return {
     recommended: enriched.length ? toRec(enriched[0]) : null,
     alternatives: enriched.slice(1, 4).map(toRec),
+    feasibleLoads: enriched.map(toRec), // full list, for the load-centric aggregation
     candidatesConsidered: wos.length,
     feasibleCount: feasible.length,
     droppedForTiming: droppedForTiming,
+    droppedForDistance: droppedForDistance,
+    droppedForShort: droppedForShort,
   };
+}
+
+// Aggregate every feasible (driver, load) pair into a load-centric view:
+// one entry per unique load, with the list of drivers who can take it
+// (best-fit driver first). Loads ranked by their best per-driver score.
+function buildTopLoads(perDriverResults, topN) {
+  const byLoad = new Map();
+  for (const dr of perDriverResults) {
+    if (!dr || !Array.isArray(dr.feasibleLoads)) continue;
+    for (const rec of dr.feasibleLoads) {
+      if (!rec || !rec.loadId) continue;
+      let entry = byLoad.get(rec.loadId);
+      if (!entry) {
+        entry = {
+          loadId: rec.loadId,
+          pickup: rec.pickup,
+          dropoff: rec.dropoff,
+          tripMiles: rec.tripMiles,
+          payout: rec.payout,
+          payoutUnit: rec.payoutUnit,
+          ratePerMile: rec.ratePerMile,
+          equipment: rec.equipment,
+          workType: rec.workType,
+          bestScore: rec.score,
+          suitableDrivers: [],
+        };
+        byLoad.set(rec.loadId, entry);
+      }
+      if (rec.score > entry.bestScore) entry.bestScore = rec.score;
+      entry.suitableDrivers.push({
+        driver: dr.driver,
+        availableFrom: dr.availableFrom,
+        nextTripStart: dr.nextTripStart,
+        currentDropoff: dr.currentTrip && dr.currentTrip.dropOff ? dr.currentTrip.dropOff.city : null,
+        deadheadMiles: rec.deadheadMiles,
+        pickupGapHours: rec.components && rec.components.pickupGapHours,
+        fitScore: rec.score,
+      });
+    }
+  }
+  const loads = Array.from(byLoad.values());
+  for (const l of loads) {
+    l.suitableDrivers.sort((a, b) => b.fitScore - a.fitScore);
+    l.driverCount = l.suitableDrivers.length;
+  }
+  loads.sort((a, b) => b.bestScore - a.bestScore);
+  return topN > 0 ? loads.slice(0, topN) : loads;
 }
 
 let isPlanning = false;
@@ -1314,7 +1435,7 @@ async function runPlanner() {
     const upcoming = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.upcoming));
     await log("planner", "Upcoming entities: " + upcoming.length);
 
-    const availability = buildAvailability(inTransit.concat(upcoming));
+    const availability = buildAvailability(inTransit.concat(upcoming), cfg);
     await chrome.storage.local.set({ plannerAvailability: availability, plannerResults: [] });
     await log("planner", "Built availability for " + availability.length + " driver(s). Searching loads…", "success");
 
@@ -1339,11 +1460,11 @@ async function runPlanner() {
         alreadyFree: a.alreadyFree,
         nextTripStart: a.nextTripStart,
         freeWindowHours: a.freeWindowHours,
-        earliestPickupAllowed: new Date(Date.parse(a.freeAtEffective) + 2 * HOUR_MS).toISOString(),
+        earliestPickupAllowed: new Date(Date.parse(a.freeAtEffective) + numOr(cfg.prepBufferHours, 2) * HOUR_MS).toISOString(),
         latestPickupAllowed: (function () {
-          let u = Date.parse(a.freeAtEffective) + 48 * HOUR_MS;
+          let u = Date.parse(a.freeAtEffective) + numOr(cfg.maxWaitHours, 48) * HOUR_MS;
           if (a.nextTripStart) {
-            const n = Date.parse(a.nextTripStart);
+            const n = Date.parse(a.nextTripStart) - numOr(cfg.gapBeforeNextHours, 0) * HOUR_MS;
             if (!isNaN(n) && n < u) u = n;
           }
           return new Date(u).toISOString();
@@ -1371,7 +1492,7 @@ async function runPlanner() {
         };
         const payload = buildSearchPayload(loc, cfg);
         const resp = await withRetry(() => searchLoadsInPage(tab.id, cfg, payload, csrf), "search", a.driver.name, 3);
-        const plan = planLoadsForDriver(a, resp);
+        const plan = planLoadsForDriver(a, resp, cfg);
         results.push(Object.assign(baseRec, plan));
         if (plan.recommended) withRec++;
         await log(
@@ -1391,7 +1512,31 @@ async function runPlanner() {
       await sleep(base + rand(base));
     }
 
-    await log("planner", "Plan complete. " + withRec + "/" + availability.length + " driver(s) have a recommended load.", "success");
+    // Build the load-centric view: top N loads, each with its suitable drivers.
+    const topLoads = buildTopLoads(results, Number(cfg.topLoads) || 30);
+    // Strip the bulky per-driver feasible lists before persisting the per-driver view.
+    const slimResults = results.map((r) => {
+      const c = Object.assign({}, r);
+      delete c.feasibleLoads;
+      return c;
+    });
+    await chrome.storage.local.set({ plannerResults: slimResults, plannerTopLoads: topLoads });
+    await log(
+      "planner",
+      "Plan complete. " + topLoads.length + " top load(s) across " + withRec + "/" + availability.length +
+        " driver(s) with a feasible match.",
+      "success"
+    );
+    if (topLoads.length) {
+      const t = topLoads[0];
+      await log(
+        "planner",
+        "Best load: £" + t.payout + " @ " + t.ratePerMile + "/mi, " + t.tripMiles + "mi, " +
+          (t.pickup && t.pickup.city) + " → " + (t.dropoff && t.dropoff.city) + " — " +
+          t.driverCount + " suitable driver(s).",
+        "info"
+      );
+    }
   } catch (e) {
     await log("planner", "Error: " + (e && e.message ? e.message : String(e)), "error");
   } finally {
