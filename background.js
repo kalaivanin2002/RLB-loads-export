@@ -34,11 +34,14 @@ const DEFAULTS = {
   restHours: 0, // rest after finishing a trip before the driver is available
   maxWaitHours: 48, // latest pickup = free + this
   gapBeforeNextHours: 2, // load must deliver this long before the next booked trip
+  deadheadMph: 30, // effective speed over straight-line deadhead miles (road-time check)
+  matchEquipment: true, // only recommend loads whose trailer matches the driver's
   // Planner scoring weights (relative; need not sum to 1).
   weightPayout: 0.4,
   weightRate: 0.25,
   weightDeadhead: 0.2,
   weightTiming: 0.15,
+  weightReposition: 0.2, // favours loads that finish near where the driver started
 };
 
 function getConfig() {
@@ -439,7 +442,7 @@ async function getLocations(cfg) {
 
 // Build the loadboard/search payload for one location (mirrors the sample,
 // injecting this location as the single origin city).
-function buildSearchPayload(loc, cfg) {
+function buildSearchPayload(loc, cfg, dateWindow) {
   const name = loc.name != null ? loc.name : loc.cityName;
   const stateCode = loc.stateCode != null ? loc.stateCode : loc.state_code;
   const country = loc.country != null ? loc.country : null;
@@ -494,8 +497,10 @@ function buildSearchPayload(loc, cfg) {
     endCityLongitude: null,
     isDestinationCityLive: null,
     endCityRadius: null,
-    startDate: null,
-    endDate: null,
+    // Bias the board to the driver's free window so forward-dated loads surface
+    // for drivers who only free up in 1–2 days (ISO, matching Relay's own times).
+    startDate: dateWindow && dateWindow.startDate ? dateWindow.startDate : null,
+    endDate: dateWindow && dateWindow.endDate ? dateWindow.endDate : null,
     minDistance: null,
     maxDistance: null,
     minimumDurationInMillis: null,
@@ -1225,10 +1230,13 @@ function buildAvailability(entities, cfg) {
 // transparent and tunable — adjust here (or we can expose them in settings).
 // payout = total £ of the run (favours big jobs over tiny shuttles);
 // rate = £/mile; deadhead = empty miles to pickup; timing = how soon it starts.
-const PLANNER_WEIGHTS = { payout: 0.4, rate: 0.25, deadhead: 0.2, timing: 0.15 };
+const PLANNER_WEIGHTS = { payout: 0.4, rate: 0.25, deadhead: 0.2, timing: 0.15, reposition: 0.2 };
 const HOUR_MS = 3600000;
 const r2 = (x) => Math.round(x * 100) / 100;
 const r3 = (x) => Math.round(x * 1000) / 1000;
+
+// Normalise an equipment/trailer type for comparison (uppercase, trimmed).
+const normEquip = (x) => (x == null || x === "" ? null : String(x).toUpperCase().trim());
 
 function ratePerMile(wo) {
   const p = wo.payout && wo.payout.value;
@@ -1272,10 +1280,15 @@ function planLoadsForDriver(avail, response, cfg) {
   const dropLng = fl.longitude != null ? fl.longitude : null;
   const nearby = Number(cfg && cfg.nearbyRadius) || 10;
   const minTrip = Number(cfg && cfg.minTripMiles) || 0;
+  const mph = numOr(cfg && cfg.deadheadMph, 30);
+  const matchEquip = cfg && cfg.matchEquipment !== false;
+  const driverEquip = normEquip(avail.equipment);
 
   let droppedForTiming = 0;
   let droppedForDistance = 0;
   let droppedForShort = 0;
+  let droppedForEquipment = 0;
+  let droppedForDriveTime = 0;
   const feasible = [];
   for (const wo of wos) {
     const pk = wo.firstPickupTime ? Date.parse(wo.firstPickupTime) : NaN;
@@ -1288,26 +1301,43 @@ function planLoadsForDriver(avail, response, cfg) {
     // Skip tiny shuttle runs — they look great on £/mile but earn almost nothing.
     const tripMi = wo.totalDistance && wo.totalDistance.value;
     if (minTrip > 0 && tripMi != null && tripMi < minTrip) { droppedForShort++; continue; }
-    // Precise nearby filter: drop-off → load pickup straight-line distance.
+    // Equipment must match the driver's trailer (when both are known).
+    const loadEquip = normEquip(wo.loads && wo.loads[0] && wo.loads[0].equipmentType);
+    if (matchEquip && driverEquip && loadEquip && driverEquip !== loadEquip) { droppedForEquipment++; continue; }
+    // Nearby filter: drop-off → pickup straight-line distance (fall back to
+    // Amazon's deadhead when the load has no pickup coordinates).
     const sl = wo.startLocation || {};
     const computedDh = haversineMiles(dropLat, dropLng, sl.latitude, sl.longitude);
-    if (computedDh != null && computedDh > nearby) { droppedForDistance++; continue; }
-    feasible.push({ wo: wo, pk: pk, computedDh: computedDh });
+    const amazonDh = wo.deadhead && wo.deadhead.value != null ? wo.deadhead.value : null;
+    const dhEff = computedDh != null ? computedDh : amazonDh;
+    if (dhEff != null && dhEff > nearby) { droppedForDistance++; continue; }
+    // Drive-time check: can the driver actually reach the pickup in time?
+    // free + (deadhead miles / speed) must not be after the pickup time.
+    if (dhEff != null && mph > 0) {
+      const arriveMs = freeMs + (dhEff / mph) * HOUR_MS;
+      if (arriveMs > pk) { droppedForDriveTime++; continue; }
+    }
+    // Repositioning: how far the delivery leaves the driver from where they started.
+    const el = wo.endLocation || {};
+    const returnMi = haversineMiles(dropLat, dropLng, el.latitude, el.longitude);
+    feasible.push({ wo: wo, pk: pk, computedDh: computedDh, amazonDh: amazonDh, returnMi: returnMi });
   }
 
   const enriched = feasible.map((f) => {
     const rpm = ratePerMile(f.wo);
-    const amazonDh = f.wo.deadhead && f.wo.deadhead.value != null ? f.wo.deadhead.value : null;
-    const dh = f.computedDh != null ? f.computedDh : amazonDh; // prefer our computed deadhead
+    const dh = f.computedDh != null ? f.computedDh : f.amazonDh; // prefer our computed deadhead
     const gapH = (f.pk - lower) / HOUR_MS;
     const payout = (f.wo.payout && f.wo.payout.value) || 0;
-    return { wo: f.wo, rpm: rpm, dh: dh, amazonDh: amazonDh, gapH: gapH, payout: payout };
+    const driveH = dh != null && mph > 0 ? dh / mph : null;
+    return { wo: f.wo, rpm: rpm, dh: dh, amazonDh: f.amazonDh, gapH: gapH, payout: payout, returnMi: f.returnMi, driveH: driveH };
   });
 
   const maxRpm = Math.max(1e-9, ...enriched.map((e) => e.rpm));
   const maxPayout = Math.max(1e-9, ...enriched.map((e) => e.payout));
   const dhVals = enriched.map((e) => e.dh).filter((v) => v != null);
   const maxDh = dhVals.length ? Math.max(...dhVals) : 0;
+  const retVals = enriched.map((e) => e.returnMi).filter((v) => v != null);
+  const maxRet = retVals.length ? Math.max(...retVals) : 0;
   const windowH = (upper - lower) / HOUR_MS;
 
   const W = {
@@ -1315,13 +1345,17 @@ function planLoadsForDriver(avail, response, cfg) {
     rate: numOr(cfg && cfg.weightRate, PLANNER_WEIGHTS.rate),
     deadhead: numOr(cfg && cfg.weightDeadhead, PLANNER_WEIGHTS.deadhead),
     timing: numOr(cfg && cfg.weightTiming, PLANNER_WEIGHTS.timing),
+    reposition: numOr(cfg && cfg.weightReposition, PLANNER_WEIGHTS.reposition),
   };
   for (const e of enriched) {
     const payoutScore = e.payout / maxPayout;
     const rateScore = e.rpm / maxRpm;
     const dhScore = e.dh == null || maxDh === 0 ? 0.5 : 1 - e.dh / maxDh;
     const timingScore = windowH > 0 ? 1 - e.gapH / windowH : 0.5;
-    e.score = W.payout * payoutScore + W.rate * rateScore + W.deadhead * dhScore + W.timing * timingScore;
+    const repoScore = e.returnMi == null || maxRet === 0 ? 0.5 : 1 - e.returnMi / maxRet;
+    e.score =
+      W.payout * payoutScore + W.rate * rateScore + W.deadhead * dhScore +
+      W.timing * timingScore + W.reposition * repoScore;
   }
   enriched.sort((a, b) => b.score - a.score);
 
@@ -1346,8 +1380,15 @@ function planLoadsForDriver(avail, response, cfg) {
       ratePerMile: r2(e.rpm),
       equipment: (e.wo.loads && e.wo.loads[0] && e.wo.loads[0].equipmentType) || null,
       workType: e.wo.workOpportunityType || null,
+      returnMiles: e.returnMi != null ? r2(e.returnMi) : null,
+      deadheadDriveHours: e.driveH != null ? r2(e.driveH) : null,
       score: r3(e.score),
-      components: { ratePerMile: r2(e.rpm), deadheadMiles: e.dh != null ? r2(e.dh) : null, pickupGapHours: r2(e.gapH) },
+      components: {
+        ratePerMile: r2(e.rpm),
+        deadheadMiles: e.dh != null ? r2(e.dh) : null,
+        pickupGapHours: r2(e.gapH),
+        returnMiles: e.returnMi != null ? r2(e.returnMi) : null,
+      },
     };
   }
 
@@ -1360,6 +1401,8 @@ function planLoadsForDriver(avail, response, cfg) {
     droppedForTiming: droppedForTiming,
     droppedForDistance: droppedForDistance,
     droppedForShort: droppedForShort,
+    droppedForEquipment: droppedForEquipment,
+    droppedForDriveTime: droppedForDriveTime,
   };
 }
 
@@ -1397,6 +1440,7 @@ function buildTopLoads(perDriverResults, topN) {
         currentDropoff: dr.currentTrip && dr.currentTrip.dropOff ? dr.currentTrip.dropOff.city : null,
         deadheadMiles: rec.deadheadMiles,
         pickupGapHours: rec.components && rec.components.pickupGapHours,
+        returnMiles: rec.returnMiles,
         fitScore: rec.score,
       });
     }
@@ -1505,6 +1549,8 @@ async function runPlanner() {
           longitude: fl.longitude,
           displayValue: fl.city + ", UK",
         };
+        // Search the full board (no date restriction) so near-term loads always
+        // show; our own feasibility filter picks what fits each driver's window.
         const payload = buildSearchPayload(loc, cfg);
         const resp = await withRetry(() => searchLoadsInPage(tab.id, cfg, payload, csrf), "search", a.driver.name, 3);
         const plan = planLoadsForDriver(a, resp, cfg);

@@ -60,6 +60,18 @@
           <small class="field-hint">Load must deliver at least this long before the driver's next booked trip.</small>
         </label>
       </div>
+      <div class="field-row">
+        <label class="field">
+          <span>Deadhead speed (mph)</span>
+          <input id="deadheadMph" type="number" min="1" step="1" />
+          <small class="field-hint">Assumed speed over the empty miles to pickup — used to check the driver can reach it in time.</small>
+        </label>
+        <div class="field">
+          <span>Match equipment</span>
+          <span class="check"><input id="matchEquipment" type="checkbox" /> On</span>
+          <small class="field-hint">Skip loads whose trailer type differs from the driver's (when both are known).</small>
+        </div>
+      </div>
       <button id="saveAdmin" class="btn-secondary" type="button">Save settings</button>
     </div>
 
@@ -149,10 +161,17 @@
             <input id="weightDeadhead" type="number" min="0" step="0.05" />
             <small class="field-hint">Weight on fewer empty miles to pickup.</small>
           </label>
+        </div>
+        <div class="field-row">
           <label class="field">
             <span>Timing</span>
             <input id="weightTiming" type="number" min="0" step="0.05" />
             <small class="field-hint">Weight on starting sooner.</small>
+          </label>
+          <label class="field">
+            <span>Reposition</span>
+            <input id="weightReposition" type="number" min="0" step="0.05" />
+            <small class="field-hint">Weight on finishing near where the driver started (avoids stranding far away).</small>
           </label>
         </div>
         <button id="saveDev" class="btn-secondary" type="button">Save settings</button>

@@ -18,10 +18,13 @@
     restHours: 0,
     maxWaitHours: 48,
     gapBeforeNextHours: 2,
+    deadheadMph: 30,
+    matchEquipment: true,
     weightPayout: 0.4,
     weightRate: 0.25,
     weightDeadhead: 0.2,
     weightTiming: 0.15,
+    weightReposition: 0.2,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -48,10 +51,13 @@
     restHours: $("restHours"),
     maxWaitHours: $("maxWaitHours"),
     gapBeforeNextHours: $("gapBeforeNextHours"),
+    deadheadMph: $("deadheadMph"),
+    matchEquipment: $("matchEquipment"),
     weightPayout: $("weightPayout"),
     weightRate: $("weightRate"),
     weightDeadhead: $("weightDeadhead"),
     weightTiming: $("weightTiming"),
+    weightReposition: $("weightReposition"),
     saveAdmin: $("saveAdmin"),
     saveDev: $("saveDev"),
     sync: $("syncBtn"),
@@ -101,10 +107,13 @@
       els.restHours.value = cfg.restHours;
       els.maxWaitHours.value = cfg.maxWaitHours;
       els.gapBeforeNextHours.value = cfg.gapBeforeNextHours;
+      els.deadheadMph.value = cfg.deadheadMph;
+      els.matchEquipment.checked = cfg.matchEquipment !== false;
       els.weightPayout.value = cfg.weightPayout;
       els.weightRate.value = cfg.weightRate;
       els.weightDeadhead.value = cfg.weightDeadhead;
       els.weightTiming.value = cfg.weightTiming;
+      els.weightReposition.value = cfg.weightReposition;
     });
   }
 
@@ -151,10 +160,13 @@
       restHours: numField(els.restHours, DEFAULTS.restHours),
       maxWaitHours: numField(els.maxWaitHours, DEFAULTS.maxWaitHours),
       gapBeforeNextHours: numField(els.gapBeforeNextHours, DEFAULTS.gapBeforeNextHours),
+      deadheadMph: Math.max(1, parseFloat(els.deadheadMph.value) || DEFAULTS.deadheadMph),
+      matchEquipment: els.matchEquipment.checked,
       weightPayout: numField(els.weightPayout, DEFAULTS.weightPayout),
       weightRate: numField(els.weightRate, DEFAULTS.weightRate),
       weightDeadhead: numField(els.weightDeadhead, DEFAULTS.weightDeadhead),
       weightTiming: numField(els.weightTiming, DEFAULTS.weightTiming),
+      weightReposition: numField(els.weightReposition, DEFAULTS.weightReposition),
     };
     chrome.storage.local.set(cfg, () =>
       appendLog("harvest", { msg: "Settings saved.", level: "success", ts: Date.now() })
@@ -236,6 +248,8 @@
     const n1 = (v) => (v == null || isNaN(v) ? "—" : (Math.round(v * 10) / 10).toLocaleString());
     const money = (v, unit) =>
       v == null ? "—" : (unit === "USD" ? "$" : "£") + (Math.round(Number(v) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const tripType = (t) =>
+      t === "ROUND_TRIP" ? "Round trip" : t === "ONE_WAY" ? "One-way" : t ? esc(String(t)) : "—";
 
     const matched = (byDriver || []).filter((d) => d && d.recommended).length;
     const unmatched = (byDriver || []).filter((d) => d && !d.recommended);
@@ -251,6 +265,7 @@
               "<td>" + dt(d.availableFrom) + "</td>" +
               "<td>" + esc(d.currentDropoff || "—") + "</td>" +
               "<td>" + n1(d.deadheadMiles) + " mi</td>" +
+              "<td>" + (d.returnMiles == null ? "—" : n1(d.returnMiles) + " mi") + "</td>" +
               "<td>" + n1(d.pickupGapHours) + " h</td>" +
               "<td>" + n1(d.fitScore != null ? d.fitScore * 100 : null) + "</td>" +
               "</tr>"
@@ -268,12 +283,13 @@
           "<span>£" + n1(l.ratePerMile) + "/mi</span>" +
           "<span>" + n1(l.tripMiles) + " mi</span>" +
           "<span>" + esc(l.equipment || "—") + "</span>" +
+          "<span>" + tripType(l.workType) + "</span>" +
           "<span>Pickup " + dt(l.pickup && l.pickup.time) + "</span>" +
           "<span>Deliver " + dt(l.dropoff && l.dropoff.time) + "</span>" +
           '<span class="dc">' + (l.driverCount || (l.suitableDrivers || []).length) + " suitable driver(s)</span>" +
           "</div>" +
-          '<table class="drivers"><thead><tr><th>Driver</th><th>Free from</th><th>Currently at</th><th>Deadhead</th><th>Pickup gap</th><th>Fit</th></tr></thead><tbody>' +
-          (drivers || '<tr><td colspan="6">No drivers.</td></tr>') +
+          '<table class="drivers"><thead><tr><th>Driver</th><th>Free from</th><th>Currently at</th><th>Deadhead</th><th>Return</th><th>Pickup gap</th><th>Fit</th></tr></thead><tbody>' +
+          (drivers || '<tr><td colspan="7">No drivers.</td></tr>') +
           "</tbody></table>" +
           "</section>"
         );
