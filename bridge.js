@@ -32,5 +32,17 @@
         /* extension context invalidated on reload — ignore */
       }
     }
+
+    // Buffer the latest loadboard search. bridge.js listens from document_start,
+    // so it captures the board's initial search even before loadboard.js has
+    // booted (document_idle). loadboard.js replays this buffer on boot, so the
+    // first page of results still gets scored — no extra network call.
+    if (d.source === "RLB_SEARCH" && Array.isArray(d.loads)) {
+      try {
+        chrome.storage.local.set({ lastSearchLoads: d.loads, lastSearchAt: Date.now() });
+      } catch (e) {
+        /* extension context invalidated on reload — ignore */
+      }
+    }
   });
 })();

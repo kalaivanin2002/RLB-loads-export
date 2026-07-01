@@ -1636,3 +1636,76 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   sendResponse({ ok: true });
 });
+
+// ─── Load board highlight support ─────────────────────────────────────────────
+// Build driver availability only (no per-driver load search), so the load-board
+// content script can score whatever loads the page is showing.
+async function refreshAvailabilityOnly() {
+  const cfg = await getConfig();
+  const tab = await findRelayTab();
+  if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
+  const csrf = await resolveCsrf(tab.id);
+  if (!csrf) return { ok: false, error: "No CSRF token — reload the Relay tab." };
+  const inTransit = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.inTransit));
+  const upcoming = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.upcoming));
+  const availability = buildAvailability(inTransit.concat(upcoming), cfg);
+  await chrome.storage.local.set({ plannerAvailability: availability, plannerAvailabilityAt: Date.now() });
+  return { ok: true, count: availability.length };
+}
+
+// Score page-provided loads against stored availability → load-centric list
+// (each load with its suitable drivers). No network; pure computation.
+async function scoreLoadsForPage(loads) {
+  const cfg = await getConfig();
+  const stored = await chrome.storage.local.get(["plannerAvailability", "plannerAvailabilityAt"]);
+  const availability = stored.plannerAvailability || [];
+  if (!availability.length) return { ok: true, drivers: 0, loads: [], availabilityAt: stored.plannerAvailabilityAt || null };
+  const response = { workOpportunities: Array.isArray(loads) ? loads : [] };
+  const perDriver = [];
+  // Aggregate why loads get dropped, so the panel/console can explain "0 matches".
+  const diag = {
+    driversTotal: availability.length,
+    driversUsable: 0,
+    driversNoLocation: 0,
+    droppedForTiming: 0,
+    droppedForDistance: 0,
+    droppedForShort: 0,
+    droppedForEquipment: 0,
+    droppedForDriveTime: 0,
+    feasiblePairs: 0,
+  };
+  for (const a of availability) {
+    const fl = a.freeLocation || {};
+    if (fl.latitude == null || fl.longitude == null || !fl.city) { diag.driversNoLocation++; continue; }
+    diag.driversUsable++;
+    const plan = planLoadsForDriver(a, response, cfg);
+    diag.droppedForTiming += plan.droppedForTiming || 0;
+    diag.droppedForDistance += plan.droppedForDistance || 0;
+    diag.droppedForShort += plan.droppedForShort || 0;
+    diag.droppedForEquipment += plan.droppedForEquipment || 0;
+    diag.droppedForDriveTime += plan.droppedForDriveTime || 0;
+    diag.feasiblePairs += plan.feasibleCount || 0;
+    perDriver.push(Object.assign(
+      { driver: a.driver, availableFrom: a.freeAtEffective, nextTripStart: a.nextTripStart, currentTrip: { dropOff: fl } },
+      plan
+    ));
+  }
+  const topLoads = buildTopLoads(perDriver, 0); // 0 = keep every matched load, not just top N
+  return { ok: true, drivers: availability.length, loads: topLoads, diag: diag, availabilityAt: stored.plannerAvailabilityAt || null };
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg) return;
+  if (msg.type === "refresh-availability") {
+    refreshAvailabilityOnly()
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
+    return true; // keep the channel open for the async response
+  }
+  if (msg.type === "score-loads") {
+    scoreLoadsForPage(msg.loads || [])
+      .then(sendResponse)
+      .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
+    return true;
+  }
+});

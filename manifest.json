@@ -30,6 +30,12 @@
       "run_at": "document_start",
       "world": "ISOLATED",
       "all_frames": true
+    },
+    {
+      "matches": ["https://relay.amazon.co.uk/*", "https://relay.amazon.com/*"],
+      "js": ["loadboard.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
     }
   ],
   "web_accessible_resources": []
