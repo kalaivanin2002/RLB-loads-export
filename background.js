@@ -1647,7 +1647,14 @@ async function refreshAvailabilityOnly() {
   const csrf = await resolveCsrf(tab.id);
   if (!csrf) return { ok: false, error: "No CSRF token — reload the Relay tab." };
   const inTransit = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.inTransit));
+  const baseUrl = cfg.relayBase.replace(/\/+$/, "");
+  chrome.windows.create({ url: baseUrl + "/tours/in-transit?ref=owp_nav_tours" }, function(w) {
+    if (chrome.runtime.lastError) console.error("[RLB] Failed to open in-transit window:", chrome.runtime.lastError);
+  });
   const upcoming = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.upcoming));
+  chrome.windows.create({ url: baseUrl + "/tours/upcoming?ref=owp_nav_tours" }, function(w) {
+    if (chrome.runtime.lastError) console.error("[RLB] Failed to open upcoming window:", chrome.runtime.lastError);
+  });
   const availability = buildAvailability(inTransit.concat(upcoming), cfg);
   await chrome.storage.local.set({ plannerAvailability: availability, plannerAvailabilityAt: Date.now() });
   return { ok: true, count: availability.length };
