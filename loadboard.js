@@ -41,16 +41,47 @@
       "#rlb-tip table{width:100%;border-collapse:collapse;}",
       "#rlb-tip td{padding:2px 6px 2px 0;white-space:nowrap;}",
       "#rlb-tip tr.b td{color:#4ade80;font-weight:600;}",
-      "#rlb-panel{position:fixed;bottom:16px;left:16px;z-index:2147483000;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.18);font:12px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;width:250px;overflow:hidden;}",
-      "#rlb-panel .t{background:#0f172a;color:#fff;font-weight:700;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;}",
-      "#rlb-panel .b{padding:10px 12px;display:flex;flex-direction:column;gap:8px;}",
-      "#rlb-panel .row{display:flex;justify-content:space-between;gap:10px;}",
-      "#rlb-panel .row span:first-child{white-space:nowrap;color:#64748b;}",
-      "#rlb-panel .row span:last-child{text-align:right;font-weight:600;overflow-wrap:anywhere;}",
-      "#rlb-panel .muted{color:#64748b;overflow-wrap:anywhere;}",
-      "#rlb-panel button{background:#2563eb;color:#fff;border:none;border-radius:6px;padding:7px 10px;font:600 12px/1 inherit;cursor:pointer;}",
-      "#rlb-panel button.sec{background:#e2e8f0;color:#1e293b;}",
-      "#rlb-panel button:disabled{background:#94a3b8;cursor:not-allowed;}",
+      // Hero launcher button (top-right, near the search).
+      "#rlb-launch,#rlb-launch *{box-sizing:border-box;}",
+      "#rlb-launch{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:linear-gradient(135deg,#2563eb,#4f46e5);color:#fff;border:none;border-radius:999px;padding:12px 20px;font:700 14px/1 -apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:0 8px 22px rgba(37,99,235,.42);transition:transform .1s ease,box-shadow .2s ease;}",
+      "#rlb-launch:hover{transform:translateY(-1px);box-shadow:0 10px 28px rgba(37,99,235,.52);}",
+      "#rlb-launch:disabled{cursor:default;}",
+      "#rlb-launch .bolt{font-size:16px;}",
+      "#rlb-launch.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
+      "@keyframes rlbpulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.45;transform:scale(1.28);}}",
+      // Progress / result card.
+      "#rlb-card,#rlb-card *{box-sizing:border-box;}",
+      "#rlb-card{position:fixed;top:122px;right:22px;width:340px;max-width:92vw;z-index:2147483000;background:#fff;border:1px solid #e5e9f0;border-radius:14px;box-shadow:0 14px 44px rgba(15,23,42,.24);font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;overflow:hidden;display:none;}",
+      "#rlb-card.show{display:block;}",
+      "#rlb-card .head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;background:#0f172a;color:#fff;}",
+      "#rlb-card .head b{font-size:14px;}",
+      "#rlb-card .head button{background:transparent;border:none;color:#cbd5e1;font-size:18px;line-height:1;cursor:pointer;}",
+      "#rlb-card .body{padding:16px;}",
+      "#rlb-card .step{display:flex;align-items:center;gap:10px;padding:5px 0;color:#94a3b8;}",
+      "#rlb-card .step.active{color:#1e293b;font-weight:600;}",
+      "#rlb-card .step.done{color:#16a34a;}",
+      "#rlb-card .step .ic{width:16px;text-align:center;flex:none;}",
+      "#rlb-card .spin{display:inline-block;width:13px;height:13px;border:2px solid #cbd5e1;border-top-color:#2563eb;border-radius:50%;animation:rlbspin .7s linear infinite;vertical-align:middle;}",
+      "@keyframes rlbspin{to{transform:rotate(360deg);}}",
+      "#rlb-card .result{text-align:center;padding:8px 0 2px;}",
+      "#rlb-card .result .n{font-size:36px;font-weight:800;color:#16a34a;line-height:1;}",
+      "#rlb-card .result.zero .n{color:#94a3b8;}",
+      "#rlb-card .result .lbl{color:#64748b;margin-top:5px;}",
+      "#rlb-card .result .rnd{color:#94a3b8;font-size:12px;margin-top:2px;}",
+      "#rlb-card .actions{display:flex;flex-direction:column;gap:8px;margin-top:15px;}",
+      "#rlb-card .actions button{width:100%;border:none;border-radius:9px;padding:11px 12px;font:700 13px/1 inherit;cursor:pointer;}",
+      "#rlb-card .actions .primary{background:#2563eb;color:#fff;}",
+      "#rlb-card .actions .ghost{background:#f1f5f9;color:#334155;}",
+      "#rlb-card .actions button:disabled{opacity:.5;cursor:default;}",
+      "#rlb-card .note{color:#94a3b8;font-size:12px;margin-top:12px;}",
+      "#rlb-card .note.stale{color:#b45309;}",
+      "#rlb-card .adv{margin-top:12px;border-top:1px solid #eef2f6;padding-top:9px;}",
+      "#rlb-card .adv summary{cursor:pointer;color:#94a3b8;font-size:12px;list-style:none;outline:none;}",
+      "#rlb-card .adv summary::-webkit-details-marker{display:none;}",
+      "#rlb-card .adv .tools{display:flex;flex-direction:column;gap:6px;margin-top:8px;}",
+      "#rlb-card .adv .tools button{width:100%;background:#f1f5f9;color:#334155;border:none;border-radius:8px;padding:9px;font:600 12px/1 inherit;cursor:pointer;}",
+      // Flash outline used when stepping through matched loads (data-attr = React-safe).
+      "[data-rlb-flash]{outline:3px solid #16a34a!important;outline-offset:-3px;}",
       // Drivers verification overlay (spot-check computed drop-offs vs Relay).
       "#rlb-drivers{position:fixed;top:60px;left:16px;z-index:2147483200;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.28);font:12px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;width:560px;max-width:92vw;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;}",
       "#rlb-drivers .t{background:#0f172a;color:#fff;font-weight:700;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;cursor:move;}",
@@ -68,52 +99,92 @@
     (document.head || document.documentElement).appendChild(st);
   }
 
-  // ── floating control panel ────────────────────────────────────────────────────
+  // ── hero launcher + progress/result card ────────────────────────────────────────
   function ensurePanel() {
     if (!onLoadboard()) return;
-    if (document.getElementById("rlb-panel")) return;
-    var p = document.createElement("div");
-    p.id = "rlb-panel";
-    p.innerHTML =
-      '<div class="t"><span>RLB match</span><span id="rlb-ar" class="muted" style="font-weight:400;font-size:11px;"></span></div>' +
-      '<div class="b">' +
-      '<div class="row"><span>Drivers</span><span id="rlb-drv">—</span></div>' +
-      '<div class="row"><span>Loads seen</span><span id="rlb-seen">—</span></div>' +
-      '<div class="row"><span>Rows found</span><span id="rlb-rows">—</span></div>' +
-      '<div class="row"><span>Matches</span><span id="rlb-mat">—</span></div>' +
-      '<button id="rlb-refresh" type="button">Refresh drivers</button>' +
-      '<button id="rlb-showdrv" class="sec" type="button">View drivers</button>' +
-      '<button id="rlb-autofill" type="button">Auto-fill &amp; search</button>' +
-      '<button id="rlb-next" class="sec" type="button" style="display:none;">Next 5 →</button>' +
-      '<div id="rlb-round" class="muted"></div>' +
-      '<div id="rlb-msg" class="muted"></div>' +
-      "</div>";
-    document.body.appendChild(p);
-    p.querySelector("#rlb-refresh").addEventListener("click", refreshDrivers);
-    p.querySelector("#rlb-showdrv").addEventListener("click", showDrivers);
-    p.querySelector("#rlb-autofill").addEventListener("click", startAutofill);
-    p.querySelector("#rlb-next").addEventListener("click", nextRound);
+    if (document.getElementById("rlb-launch")) return;
 
-    // Make the panel draggable by its title bar so it never gets stuck off-screen.
-    var bar = p.querySelector(".t");
-    bar.style.cursor = "move";
-    var drag = null;
-    bar.addEventListener("mousedown", function (e) {
-      drag = { x: e.clientX, y: e.clientY, l: p.offsetLeft, t: p.offsetTop };
-      e.preventDefault();
+    var btn = document.createElement("button");
+    btn.id = "rlb-launch";
+    btn.type = "button";
+    btn.innerHTML = '<span class="bolt">⚡</span><span class="lbl">Find my best loads</span>';
+    document.body.appendChild(btn);
+    btn.addEventListener("click", function () {
+      try {
+        runAutopilot();
+      } catch (e) {
+        console.log("[RLB] launch error:", e);
+        try { showCard(); cardError("Couldn't start", (e && e.message) ? e.message : String(e)); } catch (e2) {}
+        setLaunchBusy(false);
+        autofillBusy = false;
+      }
     });
-    document.addEventListener("mousemove", function (e) {
-      if (!drag) return;
-      var nl = drag.l + (e.clientX - drag.x);
-      var nt = drag.t + (e.clientY - drag.y);
-      nl = Math.min(Math.max(0, nl), window.innerWidth - p.offsetWidth);
-      nt = Math.min(Math.max(0, nt), window.innerHeight - p.offsetHeight);
-      p.style.left = nl + "px";
-      p.style.top = nt + "px";
-      p.style.right = "auto";
-      p.style.bottom = "auto";
-    });
-    document.addEventListener("mouseup", function () { drag = null; });
+
+    var card = document.createElement("div");
+    card.id = "rlb-card";
+    card.innerHTML =
+      '<div class="head"><b>⚡ Best loads</b><button id="rlb-card-x" type="button" title="Close">×</button></div>' +
+      '<div class="body"><div id="rlb-card-content"></div></div>';
+    document.body.appendChild(card);
+    card.querySelector("#rlb-card-x").addEventListener("click", hideCard);
+
+    positionLauncher();
+    window.addEventListener("scroll", positionLauncher, true);
+    window.addEventListener("resize", positionLauncher);
+  }
+
+  // Anchor the floating launcher to the search panel's top-right so it reads as
+  // part of the search area (we can't inject INTO the React panel without crashing
+  // it, so we position a fixed button over it and keep it aligned on scroll/resize).
+  function positionLauncher() {
+    var b = document.getElementById("rlb-launch");
+    if (!b) return;
+    var anchor = document.querySelector(".search__panel") ||
+      document.getElementById("rlb-origin-city-filter");
+    if (!anchor) return; // not on the search view — leave at CSS default (top-right)
+    var r = anchor.getBoundingClientRect();
+    if (!r.width) return;
+    var top = r.top - b.offsetHeight - 8;      // just above the search inputs
+    if (top < 8) top = r.top + 6;              // if no room above, sit at the top edge
+    b.style.top = Math.max(8, top) + "px";
+    b.style.right = Math.max(12, window.innerWidth - r.right) + "px";
+  }
+
+  function showCard() { var c = document.getElementById("rlb-card"); if (c) c.classList.add("show"); }
+  function hideCard() { var c = document.getElementById("rlb-card"); if (c) c.classList.remove("show"); }
+  function setCard(html) { var el = document.getElementById("rlb-card-content"); if (el) el.innerHTML = html; }
+  function setLaunchBusy(on) {
+    var b = document.getElementById("rlb-launch");
+    if (!b) return;
+    b.classList.toggle("busy", !!on);
+    b.disabled = !!on;
+    var lbl = b.querySelector(".lbl");
+    if (lbl) lbl.textContent = on ? "Working…" : "Find my best loads";
+  }
+
+  // Live step list shown while the autopilot runs.
+  function renderSteps(steps) {
+    var html = steps.map(function (s) {
+      var ic = s.state === "done" ? "✓" : (s.state === "active" ? '<span class="spin"></span>' : "○");
+      return '<div class="step ' + s.state + '"><span class="ic">' + ic + "</span><span>" + esc(s.label) + "</span></div>";
+    }).join("");
+    setCard(html);
+  }
+
+  // The debug tools (kept, just tucked away) — rendered inside the result card.
+  function advancedHtml() {
+    return (
+      '<details class="adv"><summary>Advanced / debug ▾</summary><div class="tools">' +
+      '<button id="rlb-t-refresh" type="button">Refresh drivers</button>' +
+      '<button id="rlb-t-view" type="button">View drivers</button>' +
+      "</div></details>"
+    );
+  }
+  function wireAdvanced() {
+    var r = document.getElementById("rlb-t-refresh");
+    var v = document.getElementById("rlb-t-view");
+    if (r) r.addEventListener("click", function () { runAutopilot(true); }); // force fresh fetch + re-run
+    if (v) v.addEventListener("click", showDrivers);
   }
   function setPanel(id, text) {
     var el = document.getElementById(id);
@@ -502,59 +573,226 @@
     return out;
   }
 
-  function setAutofillEnabled(on) {
-    var a = document.getElementById("rlb-autofill");
-    var n = document.getElementById("rlb-next");
-    if (a) a.disabled = !on;
-    if (n) n.disabled = !on;
+  // ── autopilot: fetch drivers → search a batch → show matches → pause ────────────
+  var scoreResolvers = [];          // resolved by scoreAndPaint when a score completes
+  var matchList = [], matchPos = 0; // for stepping through highlighted loads
+  var STALE_MS = 6 * 3600 * 1000;   // driver data older than this gets a "refresh?" nudge
+  function isStale(at) { return !at || (Date.now() - at > STALE_MS); }
+
+  // A promise that resolves the next time scoreAndPaint finishes (with a fallback).
+  function nextScore() {
+    return new Promise(function (resolve) {
+      scoreResolvers.push(resolve);
+      setTimeout(function () {
+        var i = scoreResolvers.indexOf(resolve);
+        if (i !== -1) { scoreResolvers.splice(i, 1); resolve(null); }
+      }, 9000);
+    });
+  }
+  function resolveScores(res) {
+    var list = scoreResolvers.slice();
+    scoreResolvers.length = 0;
+    list.forEach(function (fn) { try { fn(res); } catch (e) {} });
   }
 
-  function updateRoundUI() {
-    var next = document.getElementById("rlb-next");
-    var total = batches.length;
-    setPanel("rlb-round", total ? "Round " + Math.min(roundIdx + 1, total) + " of " + total : "");
-    if (next) next.style.display = total && roundIdx + 1 < total ? "block" : "none";
+  function refreshDriversAsync() {
+    return new Promise(function (resolve) {
+      try {
+        chrome.runtime.sendMessage({ type: "refresh-availability" }, function (res) {
+          if (chrome.runtime.lastError || !res || !res.ok) { resolve(0); return; }
+          driverCount = res.count || 0; driverAt = Date.now();
+          resolve(driverCount);
+        });
+      } catch (e) { resolve(0); }
+    });
+  }
+  function getAvailability() {
+    return new Promise(function (resolve) {
+      try { chrome.storage.local.get(["plannerAvailability"], function (r) { resolve(r.plannerAvailability || []); }); }
+      catch (e) { resolve([]); }
+    });
   }
 
-  function startAutofill() {
+  function autopilotSteps(fromSearch) {
+    return [
+      { label: "Fetching driver details", state: fromSearch ? "done" : "active" },
+      { label: "Reading trips & working out availability", state: fromSearch ? "done" : "pending" },
+      { label: "Searching loads near your drivers", state: fromSearch ? "active" : "pending" },
+      { label: "Matching loads to your drivers", state: "pending" },
+    ];
+  }
+
+  function loadAvailabilityMeta() {
+    return new Promise(function (resolve) {
+      try {
+        chrome.storage.local.get(["plannerAvailability", "plannerAvailabilityAt"], function (r) {
+          resolve({ count: (r.plannerAvailability || []).length, at: r.plannerAvailabilityAt || null });
+        });
+      } catch (e) { resolve({ count: 0, at: null }); }
+    });
+  }
+
+  // Reuse the last-fetched driver availability by default (no traffic); only fetch
+  // when there is none, or when forced via Advanced → Refresh drivers.
+  function ensureDrivers(steps, force) {
+    return loadAvailabilityMeta().then(function (meta) {
+      if (!force && meta.count > 0) {
+        steps[0].state = "done";
+        steps[0].label = "Using driver details (as of " + dtUK(meta.at) + ")" + (isStale(meta.at) ? " ⚠ may be old" : "");
+        steps[1].state = "done"; steps[1].label = "Availability ready";
+        renderSteps(steps);
+        return meta;
+      }
+      steps[0].state = "active"; steps[0].label = force ? "Refreshing driver details" : "Fetching driver details";
+      renderSteps(steps);
+      return refreshDriversAsync().then(function (count) {
+        steps[0].state = "done"; steps[1].state = "done"; renderSteps(steps);
+        return { count: count, at: Date.now() };
+      });
+    });
+  }
+
+  function runAutopilot(force) {
     if (autofillBusy) return;
-    try {
-      chrome.storage.local.get(["plannerAvailability"], function (r) {
-        var list = r.plannerAvailability || [];
-        if (!list.length) { setPanel("rlb-msg", "Click Refresh drivers first."); return; }
+    autofillBusy = true;
+    showCard();
+    setLaunchBusy(true);
+    var steps = autopilotSteps(false);
+    renderSteps(steps);
+
+    ensureDrivers(steps, force === true).then(function (meta) {
+      if (!meta || !meta.count) { cardError("No drivers found.", "Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers."); return null; }
+      driverCount = meta.count; driverAt = meta.at;
+      return getAvailability().then(function (list) {
         batches = buildBatches(list);
         roundIdx = 0;
-        if (!batches.length) { setPanel("rlb-msg", "No placeable drivers (no drop-off coords)."); return; }
-        updateRoundUI();
-        runRound();
+        if (!batches.length) { cardError("No drivers to search from.", "None of your drivers had a usable drop-off location (Advanced → View drivers)."); return null; }
+        return runAutoRound(steps);
       });
-    } catch (e) { setPanel("rlb-msg", "Extension reloaded — refresh the page."); }
+    }).catch(function (e) {
+      cardError("Something went wrong.", (e && e.message) ? e.message : String(e));
+    }).then(function () {
+      setLaunchBusy(false);
+      autofillBusy = false;
+    });
+  }
+
+  function runAutoRound(steps) {
+    var cities = batches[roundIdx].map(function (b) { return b.city; });
+    steps[2].state = "active";
+    steps[2].label = "Searching loads near your drivers (round " + (roundIdx + 1) + " of " + batches.length + ")";
+    steps[3].state = "pending";
+    renderSteps(steps);
+    var scoreP = nextScore(); // arm BEFORE the search fires
+    return fillBatch(cities).then(function () {
+      steps[2].state = "done"; steps[3].state = "active"; renderSteps(steps);
+      return scoreP;          // wait for highlighting to finish
+    }).then(function () {
+      return delay(500);      // let the paint settle
+    }).then(function () {
+      steps[3].state = "done"; renderSteps(steps);
+      showRoundResult(cities);
+    });
+  }
+
+  function countHighlighted() { return document.querySelectorAll("[data-rlb-match]").length; }
+
+  // Keep the result card's number in sync with what's actually highlighted — so
+  // paginating (a fresh score for the new page) updates the count and the
+  // "Show matches" step-through targets the current page. No-op mid-run.
+  function refreshCardCount() {
+    if (autofillBusy) return;
+    var nEl = document.querySelector("#rlb-card .result .n");
+    if (!nEl) return; // card isn't showing a result right now
+    var n = countHighlighted();
+    nEl.textContent = String(n);
+    var res = nEl.parentNode;
+    if (res && res.classList) res.classList.toggle("zero", n === 0);
+    var lbl = document.querySelector("#rlb-card .result .lbl");
+    if (lbl) lbl.textContent = n === 1 ? "load matches your drivers" : "loads match your drivers";
+    // NOTE: do NOT reset matchPos here — this runs on every repaint (incl. the
+    // repaint caused by flashing a match), which would keep "Show matches" stuck.
+    var step = document.getElementById("rlb-a-step");
+    if (step && step.textContent.indexOf("Next match") === -1) {
+      step.style.display = n ? "" : "none";
+    }
+  }
+
+  function showRoundResult(cities) {
+    var n = countHighlighted();
+    var more = roundIdx + 1 < batches.length;
+    setCard(
+      '<div class="result' + (n ? "" : " zero") + '">' +
+      '<div class="n">' + n + "</div>" +
+      '<div class="lbl">' + (n === 1 ? "load matches your drivers" : "loads match your drivers") + "</div>" +
+      '<div class="rnd">Round ' + (roundIdx + 1) + " of " + batches.length + " · " + esc(cities.join(", ")) + "</div>" +
+      "</div>" +
+      '<div class="actions">' +
+      (n ? '<button class="primary" id="rlb-a-step">Show matches ▸</button>' : "") +
+      (more ? '<button class="' + (n ? "ghost" : "primary") + '" id="rlb-a-next">Next 5 areas →</button>' : "") +
+      '<button class="ghost" id="rlb-a-done">Done</button>' +
+      "</div>" +
+      '<div class="note' + (isStale(driverAt) ? " stale" : "") + '">Drivers as of ' + esc(dtUK(driverAt)) +
+      (isStale(driverAt) ? " · may be out of date — Advanced → Refresh drivers" : "") +
+      (more ? "" : " · all areas covered") + "</div>" +
+      advancedHtml()
+    );
+    matchList = [].slice.call(document.querySelectorAll("[data-rlb-match]"));
+    matchPos = 0;
+    var step = document.getElementById("rlb-a-step");
+    var next = document.getElementById("rlb-a-next");
+    var done = document.getElementById("rlb-a-done");
+    if (step) step.addEventListener("click", stepMatch);
+    if (next) next.addEventListener("click", nextRound);
+    if (done) done.addEventListener("click", hideCard);
+    wireAdvanced();
+  }
+
+  // Scroll to the next highlighted load and flash it. We re-query the LIVE nodes
+  // each click — React re-renders the load cards, so any saved references go stale
+  // (detached), and scrollIntoView on a detached node does nothing.
+  function stepMatch() {
+    var els = [].slice.call(document.querySelectorAll("[data-rlb-match]"));
+    if (!els.length) return;
+    var idx = matchPos % els.length;
+    matchPos++;
+    var el = els[idx];
+    var prev = document.querySelectorAll("[data-rlb-flash]");
+    for (var i = 0; i < prev.length; i++) prev[i].removeAttribute("data-rlb-flash");
+    el.setAttribute("data-rlb-flash", "1");
+    try { el.scrollIntoView({ behavior: "smooth", block: "center" }); }
+    catch (e) { try { el.scrollIntoView(); } catch (e2) {} }
+    setTimeout(function () { el.removeAttribute("data-rlb-flash"); }, 1800);
+    var s = document.getElementById("rlb-a-step");
+    if (s) s.textContent = "Next match ▸ (" + (idx + 1) + "/" + els.length + ")";
   }
 
   function nextRound() {
     if (autofillBusy) return;
-    if (roundIdx + 1 >= batches.length) { setPanel("rlb-msg", "All rounds done."); return; }
+    if (roundIdx + 1 >= batches.length) return;
     roundIdx++;
-    updateRoundUI();
-    runRound();
+    autofillBusy = true;
+    setLaunchBusy(true);
+    var steps = autopilotSteps(true);
+    renderSteps(steps);
+    runAutoRound(steps).catch(function (e) {
+      cardError("Something went wrong.", (e && e.message) ? e.message : String(e));
+    }).then(function () {
+      setLaunchBusy(false);
+      autofillBusy = false;
+    });
   }
 
-  function runRound() {
-    if (roundIdx >= batches.length) { setPanel("rlb-msg", "All rounds done."); return; }
-    var batch = batches[roundIdx];
-    var cities = batch.map(function (b) { return b.city; });
-    autofillBusy = true;
-    setAutofillEnabled(false);
-    setPanel("rlb-msg", "Round " + (roundIdx + 1) + "/" + batches.length + ": filling " + cities.join(", ") + "…");
-    fillBatch(cities).then(function () {
-      setPanel("rlb-msg", "Round " + (roundIdx + 1) + "/" + batches.length + " searched: " + cities.join(", "));
-    }).catch(function (e) {
-      setPanel("rlb-msg", "Round error: " + (e && e.message ? e.message : e));
-    }).then(function () {
-      autofillBusy = false;
-      setAutofillEnabled(true);
-      updateRoundUI();
-    });
+  function cardError(title, detail) {
+    setCard(
+      '<div class="result zero"><div class="lbl" style="font-weight:700;color:#b91c1c;font-size:14px;">' + esc(title) + "</div>" +
+      (detail ? '<div class="rnd">' + esc(detail) + "</div>" : "") + "</div>" +
+      '<div class="actions"><button class="ghost" id="rlb-a-done">Close</button></div>' +
+      advancedHtml()
+    );
+    var done = document.getElementById("rlb-a-done");
+    if (done) done.addEventListener("click", hideCard);
+    wireAdvanced();
   }
 
   // The board's initial search often fires before this script's message listener
@@ -603,19 +841,16 @@
       chrome.runtime.sendMessage({ type: "score-loads", loads: loads }, function (res) {
         if (chrome.runtime.lastError || !res || !res.ok) {
           console.log("[RLB board] score-loads failed:", chrome.runtime.lastError || res);
+          resolveScores(null); // unblock the autopilot even on failure
           return;
         }
         latest = {};
         (res.loads || []).forEach(function (l) { if (l && l.loadId) latest[l.loadId] = l; });
         driverCount = res.drivers || driverCount;
-        updatePanel();
+        matchPos = 0; // a fresh score (new page/round) → step-through starts over
         console.log("[RLB board] scored:", (res.loads || []).length, "matching load(s). diag:", res.diag);
-        if (!res.drivers) setPanel("rlb-msg", "No drivers loaded — click Refresh drivers.");
-        else if (res.diag) {
-          var d = res.diag;
-          setPanel("rlb-msg", (res.loads || []).length + " match / " + d.driversUsable + "/" + d.driversTotal + " drivers usable");
-        }
         schedulePaint();
+        resolveScores(res); // let a running autopilot round continue
       });
     } catch (e) { /* context invalidated */ }
   }
@@ -667,6 +902,7 @@
   function doPaint() {
     if (!onLoadboard()) return; // injected on all Relay pages; only act on the board
     ensurePanel();
+    positionLauncher();
     ensureAutoRefreshOff();
     var rows = loadRows();
     setPanel("rlb-rows", String(rows.length));
@@ -689,6 +925,7 @@
       }
     }
     setPanel("rlb-mat", String(matched));
+    refreshCardCount(); // keep the card count in sync across pagination / re-scores
   }
 
   // ── auto-refresh off ───────────────────────────────────────────────────────────
