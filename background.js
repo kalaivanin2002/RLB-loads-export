@@ -83,6 +83,47 @@ async function log(job, msg, level) {
   }
 }
 
+// ── durable error log ────────────────────────────────────────────────────────
+// Separate from the per-job progress logs (which get wiped by resetLog on every
+// run). Survives across runs/service-worker restarts so a transient failure
+// (e.g. an intermittent 500) can still be diagnosed after the fact. Capped to
+// avoid unbounded storage growth.
+const ERROR_LOG_MAX = 200;
+
+async function logError(source, err, context) {
+  const message = err && err.message ? err.message : String(err);
+  const stack = err && err.stack ? String(err.stack) : null;
+  const entry = {
+    ts: Date.now(),
+    source: source, // e.g. "background/searchLoadsInPage" or "hook/entitiesV2"
+    message: message,
+    stack: stack,
+    context: context || null,
+  };
+  console.error("[RLB error] " + source + ": " + message, context || "", stack || "");
+  try {
+    const { errorLog } = await chrome.storage.local.get(["errorLog"]);
+    const next = (errorLog || []).concat(entry).slice(-ERROR_LOG_MAX);
+    await chrome.storage.local.set({ errorLog: next });
+  } catch (e) {
+    /* storage unavailable — already console.error'd above */
+  }
+}
+
+// Global safety net: catch anything that escapes normal try/catch (e.g. a bug
+// in a .then() chain with no .catch, or a synchronous error outside our own
+// handlers) so it lands in the durable error log instead of vanishing when the
+// service worker is later recycled.
+self.addEventListener("error", (event) => {
+  logError("background/uncaught", event.error || event.message || "unknown error", {
+    filename: event.filename,
+    lineno: event.lineno,
+  });
+});
+self.addEventListener("unhandledrejection", (event) => {
+  logError("background/unhandledrejection", event.reason || "unknown rejection");
+});
+
 // ── Relay tab + in-page request runner ───────────────────────────────────────
 async function findRelayTab() {
   const tabs = await chrome.tabs.query({
@@ -113,7 +154,11 @@ async function runInPage(tabId, url, init) {
     world: "MAIN",
   });
   const r = results && results[0] && results[0].result;
-  if (!r) throw new Error("no response from page");
+  if (!r) {
+    const err = new Error("no response from page");
+    await logError("background/runInPage", err, { url: url, tabId: tabId });
+    throw err;
+  }
   return r;
 }
 
@@ -129,10 +174,15 @@ async function fetchCitiesInPage(tabId, cfg, query) {
     credentials: "include",
     headers: { Accept: "application/json" },
   });
-  if (!r.ok) throw new Error("Relay HTTP " + r.status);
+  if (!r.ok) {
+    const err = new Error("Relay HTTP " + r.status);
+    await logError("background/fetchCitiesInPage", err, { url: url, status: r.status, body: (r.body || "").slice(0, 300) });
+    throw err;
+  }
   try {
     return JSON.parse(r.body);
   } catch (e) {
+    await logError("background/fetchCitiesInPage/parse", e, { url: url, body: (r.body || "").slice(0, 300) });
     throw new Error("Relay response was not JSON");
   }
 }
@@ -180,7 +230,11 @@ async function postLocations(cfg, locations) {
     body: JSON.stringify(locations),
   });
   const text = await res.text();
-  if (!res.ok) throw new Error("OnTrack HTTP " + res.status + ": " + text.slice(0, 300));
+  if (!res.ok) {
+    const err = new Error("OnTrack HTTP " + res.status + ": " + text.slice(0, 300));
+    await logError("background/postLocations", err, { url: cfg.ontrackUrl, status: res.status, count: locations.length });
+    throw err;
+  }
   return text;
 }
 
@@ -224,6 +278,7 @@ async function harvest() {
         }
       } catch (e) {
         await log("harvest", "'" + query + "': " + (e && e.message ? e.message : String(e)), "error");
+        await logError("background/harvest", e, { query: query });
       }
       await sleep(cfg.delayMs);
     }
@@ -364,6 +419,7 @@ async function syncInTransitTrips() {
         await log("trips", "Fetched API response via manual call", "info");
       } catch (e2) {
         await log("trips", "Both interception and manual call failed: " + (e2.message || String(e2)), "error");
+        await logError("background/syncInTransitTrips/fetch", e2, { tabId: tab.id });
         throw e2;
       }
     }
@@ -404,6 +460,7 @@ async function syncInTransitTrips() {
         await log("trips", (i + 1) + "/" + entities.length + " " + entity.id + ": OK", "success");
       } catch (e) {
         await log("trips", (i + 1) + "/" + entities.length + " " + (entity.id || "unknown") + ": " + (e.message || String(e)), "error");
+        await logError("background/syncInTransitTrips/entity", e, { entityId: entity && entity.id, index: i });
         errors++;
       }
     }
@@ -412,6 +469,7 @@ async function syncInTransitTrips() {
     await log("trips", "Done. Captured " + trips.length + " trip(s)" + (errors > 0 ? " with " + errors + " error(s)" : "") + ".", trips.length > 0 ? "success" : "warn");
   } catch (e) {
     await log("trips", "Error: " + (e.message || String(e)), "error");
+    await logError("background/syncInTransitTrips", e);
   } finally {
     await setRunning("trips", false);
   }
@@ -426,11 +484,16 @@ async function getLocations(cfg) {
     headers: { Accept: "application/json", Authorization: "Bearer " + cfg.token },
   });
   const text = await res.text();
-  if (!res.ok) throw new Error("OnTrack GET HTTP " + res.status + ": " + text.slice(0, 200));
+  if (!res.ok) {
+    const err = new Error("OnTrack GET HTTP " + res.status + ": " + text.slice(0, 200));
+    await logError("background/getLocations", err, { url: cfg.ontrackUrl, status: res.status });
+    throw err;
+  }
   let data;
   try {
     data = JSON.parse(text);
   } catch (e) {
+    await logError("background/getLocations/parse", e, { url: cfg.ontrackUrl, body: text.slice(0, 300) });
     throw new Error("OnTrack GET response was not JSON");
   }
   if (Array.isArray(data)) return data;
@@ -546,10 +609,15 @@ async function searchLoadsInPage(tabId, cfg, payload, csrf) {
     headers: headers,
     body: JSON.stringify(payload),
   });
-  if (!r.ok) throw new Error("Relay search HTTP " + r.status);
+  if (!r.ok) {
+    const err = new Error("Relay search HTTP " + r.status);
+    await logError("background/searchLoadsInPage", err, { url: url, status: r.status, body: (r.body || "").slice(0, 300) });
+    throw err;
+  }
   try {
     return JSON.parse(r.body);
   } catch (e) {
+    await logError("background/searchLoadsInPage/parse", e, { url: url, body: (r.body || "").slice(0, 300) });
     throw new Error("Relay search response was not JSON");
   }
 }
@@ -573,7 +641,11 @@ async function postIngest(cfg, searchResponse) {
     body: JSON.stringify(searchResponse),
   });
   const text = await res.text();
-  if (!res.ok) throw new Error("Ingest HTTP " + res.status + ": " + text.slice(0, 200));
+  if (!res.ok) {
+    const err = new Error("Ingest HTTP " + res.status + ": " + text.slice(0, 200));
+    await logError("background/postIngest", err, { url: cfg.ingestUrl, status: res.status });
+    throw err;
+  }
   return text;
 }
 
@@ -753,7 +825,10 @@ async function withRetry(fn, kind, label, maxRetries) {
       const transient =
         /HTTP (0|408|429|500|502|503|504)\b/.test(msg) || /network|failed to fetch|no response/i.test(msg);
       attempt++;
-      if (attempt > maxRetries || !transient) throw e;
+      if (attempt > maxRetries || !transient) {
+        await logError("background/withRetry/" + kind, e, { label: label, attempt: attempt, exhausted: attempt > maxRetries, transient: transient });
+        throw e;
+      }
       const backoff = Math.min(10000, 400 * Math.pow(2, attempt)) + rand(400);
       await log("loads", label + ": " + kind + " retry " + attempt + "/" + maxRetries + " in " + Math.round(backoff) + "ms (" + msg + ")", "warn");
       await sleep(backoff);
@@ -799,6 +874,7 @@ async function startJob(locations) {
     await log("loads", "Auto-refresh: " + (ar.found ? ar.action : "toggle not found — continuing") + ".", ar.found ? "success" : "warn");
   } catch (e) {
     await log("loads", "Auto-refresh step failed: " + (e.message || String(e)) + " — continuing.", "warn");
+    await logError("background/startJob/disableAutoRefresh", e);
   }
 
   await chrome.storage.local.set({
@@ -845,6 +921,7 @@ async function startFindLoads() {
     locations = await getLocations(cfg);
   } catch (e) {
     await log("loads", "Failed to fetch locations: " + (e.message || String(e)), "error");
+    await logError("background/startFindLoads/getLocations", e);
     return;
   }
   if (!locations.length) {
@@ -980,6 +1057,7 @@ async function processLoop() {
         state.updatedAt = Date.now();
         await chrome.storage.local.set({ loadsJobState: state });
         await log("loads", i + 1 + "/" + state.total + " " + label + ": ERROR " + (e.message || e), "error");
+        await logError("background/processLoop", e, { index: i, label: label });
       }
 
       await sleep(base + rand(base)); // fast: base..2×base (jitter)
@@ -1030,7 +1108,7 @@ function freshenDates(payload) {
     if (o && typeof o === "object") {
       // Raise the page size so trips can't be truncated (the captured payload
       // caps at 100, which silently drops trips for larger fleets).
-      if (o.pagination && typeof o.pagination === "object") o.pagination.size = 1000;
+      if (o.pagination && typeof o.pagination === "object") o.pagination.size = 500;
       for (const k of Object.keys(o)) {
         if (k === "lte" && typeof o[k] === "string") o[k] = lte;
         else if (k === "gte" && typeof o[k] === "string") o[k] = gte;
@@ -1132,8 +1210,24 @@ async function fetchEntities(tabId, cfg, csrf, payload) {
     world: "MAIN",
   });
   const r = res && res[0] && res[0].result;
-  if (!r) throw new Error("no response from page");
-  if (!r.ok) throw new Error("entitiesV2 HTTP " + r.status + (r.parseError ? " (parse error)" : "") + (r.error ? " " + r.error : ""));
+  if (!r) {
+    const err = new Error("no response from page");
+    await logError("background/fetchEntities", err, { url: url });
+    throw err;
+  }
+  if (!r.ok) {
+    const err = new Error("entitiesV2 HTTP " + r.status + (r.parseError ? " (parse error)" : "") + (r.error ? " " + r.error : ""));
+    err.status = r.status;
+    await logError("background/fetchEntities", err, { url: url, status: r.status, parseError: !!r.parseError });
+    // A stale/invalid CSRF token typically surfaces as 401/403, but Relay's
+    // edge sometimes maps an expired session to a bare 500 too. Clear the
+    // cached token so the next refresh attempt re-derives it from the page
+    // instead of retrying the same failing token forever.
+    if (r.status === 401 || r.status === 403 || r.status === 500) {
+      await chrome.storage.local.remove(["csrfToken", "csrfHeaderName", "csrfCapturedAt"]);
+    }
+    throw err;
+  }
   return r.entities || [];
 }
 
@@ -1568,6 +1662,7 @@ async function runPlanner() {
       } catch (e) {
         results.push(Object.assign(baseRec, { recommended: null, alternatives: [], error: e && e.message ? e.message : String(e) }));
         await log("planner", i + 1 + "/" + availability.length + " " + a.driver.name + ": ERROR " + (e.message || e), "error");
+        await logError("background/runPlanner/driver", e, { driver: a.driver && a.driver.name, index: i });
       }
       await chrome.storage.local.set({ plannerResults: results });
       await sleep(base + rand(base));
@@ -1600,6 +1695,7 @@ async function runPlanner() {
     }
   } catch (e) {
     await log("planner", "Error: " + (e && e.message ? e.message : String(e)), "error");
+    await logError("background/runPlanner", e);
   } finally {
     isPlanning = false;
     await setRunning("planner", false);
@@ -1607,29 +1703,38 @@ async function runPlanner() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Trigger handlers run fire-and-forget (the switch doesn't await them), so a
+// thrown error inside one would otherwise vanish silently instead of surfacing
+// anywhere. Catch and route it into the durable error log.
+function safeTrigger(name, fn) {
+  Promise.resolve()
+    .then(fn)
+    .catch((e) => logError("background/trigger/" + name, e));
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
   switch (msg.type) {
     case "start-harvest":
-      harvest();
+      safeTrigger("start-harvest", harvest);
       break;
     case "start-find-loads":
-      startFindLoads();
+      safeTrigger("start-find-loads", startFindLoads);
       break;
     case "stop-find-loads":
-      stopFindLoads();
+      safeTrigger("stop-find-loads", stopFindLoads);
       break;
     case "resume-find-loads":
-      resumeFindLoads();
+      safeTrigger("resume-find-loads", resumeFindLoads);
       break;
     case "retry-failed-loads":
-      retryFailed();
+      safeTrigger("retry-failed-loads", retryFailed);
       break;
     case "start-sync-trips":
-      syncInTransitTrips();
+      safeTrigger("start-sync-trips", syncInTransitTrips);
       break;
     case "start-planner":
-      runPlanner();
+      safeTrigger("start-planner", runPlanner);
       break;
     default:
       return;
@@ -1640,18 +1745,44 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // ─── Load board highlight support ─────────────────────────────────────────────
 // Build driver availability only (no per-driver load search), so the load-board
 // content script can score whatever loads the page is showing.
+
+// Turn a fetchEntities() rejection into a message that tells the user what to
+// actually do, since "HTTP 500" alone gives no next step.
+function describeFetchEntitiesError(e, which) {
+  const status = e && e.status;
+  if (status === 401 || status === 403) {
+    return "Relay rejected the request (HTTP " + status + ", " + which + ") — your session token expired. Reload the Relay tab and sign in again, then retry.";
+  }
+  if (status === 500) {
+    return "Relay's server returned HTTP 500 for " + which + " trips — this usually means the session token is stale. It's been cleared; reload the Relay tab, make sure you're signed in, then retry.";
+  }
+  if (status) {
+    return "Relay returned HTTP " + status + " for " + which + " trips.";
+  }
+  return (e && e.message) || String(e);
+}
+
 async function refreshAvailabilityOnly() {
   const cfg = await getConfig();
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
   const csrf = await resolveCsrf(tab.id);
   if (!csrf) return { ok: false, error: "No CSRF token — reload the Relay tab." };
-  const inTransit = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.inTransit));
+  let inTransit, upcoming;
+  try {
+    inTransit = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.inTransit));
+  } catch (e) {
+    return { ok: false, error: describeFetchEntitiesError(e, "in-transit") };
+  }
   const baseUrl = cfg.relayBase.replace(/\/+$/, "");
   chrome.windows.create({ url: baseUrl + "/tours/in-transit?ref=owp_nav_tours" }, function(w) {
     if (chrome.runtime.lastError) console.error("[RLB] Failed to open in-transit window:", chrome.runtime.lastError);
   });
-  const upcoming = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.upcoming));
+  try {
+    upcoming = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.upcoming));
+  } catch (e) {
+    return { ok: false, error: describeFetchEntitiesError(e, "upcoming") };
+  }
   chrome.windows.create({ url: baseUrl + "/tours/upcoming?ref=owp_nav_tours" }, function(w) {
     if (chrome.runtime.lastError) console.error("[RLB] Failed to open upcoming window:", chrome.runtime.lastError);
   });
@@ -1706,13 +1837,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "refresh-availability") {
     refreshAvailabilityOnly()
       .then(sendResponse)
-      .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
+      .catch((e) => {
+        logError("background/refresh-availability", e);
+        sendResponse({ ok: false, error: String((e && e.message) || e) });
+      });
     return true; // keep the channel open for the async response
   }
   if (msg.type === "score-loads") {
     scoreLoadsForPage(msg.loads || [])
       .then(sendResponse)
-      .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
+      .catch((e) => {
+        logError("background/score-loads", e);
+        sendResponse({ ok: false, error: String((e && e.message) || e) });
+      });
     return true;
   }
 });

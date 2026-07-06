@@ -44,5 +44,25 @@
         /* extension context invalidated on reload — ignore */
       }
     }
+
+    // Errors from intercepted page requests (hook.js runs in the MAIN world and
+    // has no extension API access). Persist into the same durable errorLog that
+    // background.js writes to, so a non-2xx/parse failure on entitiesV2 or
+    // loadboard/search is diagnosable later instead of only visible in the
+    // page's own DevTools console at the moment it happened.
+    if (d.source === "RLB_ERROR") {
+      console.error("[RLB bridge] page error:", d.tag, d.detail);
+      (async () => {
+        try {
+          const ERROR_LOG_MAX = 200;
+          const { errorLog } = await chrome.storage.local.get(["errorLog"]);
+          const entry = { ts: Date.now(), source: "hook/" + d.tag, message: (d.detail && (d.detail.status ? "HTTP " + d.detail.status : d.detail.message)) || "page request error", context: d.detail || null };
+          const next = (errorLog || []).concat(entry).slice(-ERROR_LOG_MAX);
+          await chrome.storage.local.set({ errorLog: next });
+        } catch (e) {
+          /* extension context invalidated on reload — ignore */
+        }
+      })();
+    }
   });
 })();

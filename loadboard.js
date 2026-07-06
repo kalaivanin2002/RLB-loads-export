@@ -14,6 +14,7 @@
   var lastLoads = null; // last slim loads seen from the page (for re-scoring after a driver refresh)
   var driverCount = 0;
   var driverAt = null;
+  var lastDriverError = null; // set by refreshDriversAsync on failure, shown in the "No drivers found" card
   var tip = null;
   var observer = null;
   var scheduled = false;
@@ -23,6 +24,25 @@
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
   };
+
+  // Persist into the same durable errorLog that background.js/bridge.js write
+  // to, so failures in this content script (e.g. the "Find my best loads"
+  // button, or a failed refresh-availability round-trip) are diagnosable later
+  // instead of only visible in this page's own DevTools console.
+  function logError(tag, err, context) {
+    var message = err && err.message ? err.message : String(err);
+    console.error("[RLB loadboard] " + tag + ":", message, context || "");
+    try {
+      chrome.storage.local.get(["errorLog"], function (r) {
+        var ERROR_LOG_MAX = 200;
+        var entry = { ts: Date.now(), source: "loadboard/" + tag, message: message, stack: (err && err.stack) || null, context: context || null };
+        var next = (r.errorLog || []).concat(entry).slice(-ERROR_LOG_MAX);
+        chrome.storage.local.set({ errorLog: next });
+      });
+    } catch (e) {
+      /* extension context invalidated on reload — ignore */
+    }
+  }
   var n1 = function (v) { return v == null || isNaN(v) ? "—" : Math.round(v * 10) / 10; };
   var onLoadboard = function () { return location.pathname.indexOf("/loadboard") !== -1; };
 
@@ -114,6 +134,7 @@
         runAutopilot();
       } catch (e) {
         console.log("[RLB] launch error:", e);
+        logError("launchClick", e);
         try { showCard(); cardError("Couldn't start", (e && e.message) ? e.message : String(e)); } catch (e2) {}
         setLaunchBusy(false);
         autofillBusy = false;
@@ -599,17 +620,24 @@
     return new Promise(function (resolve) {
       try {
         chrome.runtime.sendMessage({ type: "refresh-availability" }, function (res) {
-          if (chrome.runtime.lastError || !res || !res.ok) { resolve(0); return; }
+          if (chrome.runtime.lastError || !res || !res.ok) {
+            var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unknown failure";
+            logError("refreshDriversAsync", msg);
+            lastDriverError = msg;
+            resolve(0);
+            return;
+          }
+          lastDriverError = null;
           driverCount = res.count || 0; driverAt = Date.now();
           resolve(driverCount);
         });
-      } catch (e) { resolve(0); }
+      } catch (e) { lastDriverError = (e && e.message) || String(e); logError("refreshDriversAsync", e); resolve(0); }
     });
   }
   function getAvailability() {
     return new Promise(function (resolve) {
       try { chrome.storage.local.get(["plannerAvailability"], function (r) { resolve(r.plannerAvailability || []); }); }
-      catch (e) { resolve([]); }
+      catch (e) { logError("getAvailability", e); resolve([]); }
     });
   }
 
@@ -661,7 +689,11 @@
     renderSteps(steps);
 
     ensureDrivers(steps, force === true).then(function (meta) {
-      if (!meta || !meta.count) { cardError("No drivers found.", "Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers."); return null; }
+      if (!meta || !meta.count) {
+        var reason = lastDriverError ? ("Reason: " + lastDriverError + ". ") : "";
+        cardError("No drivers found.", reason + "Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers.");
+        return null;
+      }
       driverCount = meta.count; driverAt = meta.at;
       return getAvailability().then(function (list) {
         batches = buildBatches(list);
@@ -670,6 +702,7 @@
         return runAutoRound(steps);
       });
     }).catch(function (e) {
+      logError("runAutopilot", e);
       cardError("Something went wrong.", (e && e.message) ? e.message : String(e));
     }).then(function () {
       setLaunchBusy(false);
@@ -818,7 +851,9 @@
       chrome.runtime.sendMessage({ type: "refresh-availability" }, function (res) {
         if (btn) { btn.disabled = false; btn.textContent = "Refresh drivers"; }
         if (chrome.runtime.lastError || !res || !res.ok) {
-          setPanel("rlb-msg", "Error: " + ((res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "failed"));
+          var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "failed";
+          logError("refreshDriversButton", msg);
+          setPanel("rlb-msg", "Error: " + msg);
           return;
         }
         driverCount = res.count || 0;
@@ -829,6 +864,7 @@
       });
     } catch (e) {
       if (btn) { btn.disabled = false; btn.textContent = "Refresh drivers"; }
+      logError("refreshDriversButton", e);
       setPanel("rlb-msg", "Extension reloaded — refresh the page.");
     }
   }
@@ -840,7 +876,7 @@
     try {
       chrome.runtime.sendMessage({ type: "score-loads", loads: loads }, function (res) {
         if (chrome.runtime.lastError || !res || !res.ok) {
-          console.log("[RLB board] score-loads failed:", chrome.runtime.lastError || res);
+          logError("scoreAndPaint", (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "score-loads failed");
           resolveScores(null); // unblock the autopilot even on failure
           return;
         }
@@ -852,7 +888,7 @@
         schedulePaint();
         resolveScores(res); // let a running autopilot round continue
       });
-    } catch (e) { /* context invalidated */ }
+    } catch (e) { logError("scoreAndPaint", e); }
   }
 
   // ── painting ─────────────────────────────────────────────────────────────────

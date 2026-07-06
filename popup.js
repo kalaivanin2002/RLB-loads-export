@@ -1,6 +1,26 @@
 
 // ─── RLB Location Sync + Find Loads ───────────────────────────────────────────
 (function () {
+  // Global safety net for this popup document — catches anything that escapes
+  // normal try/catch so it lands in the durable errorLog instead of only
+  // showing up in the popup's own (easy-to-miss, closes-on-blur) DevTools.
+  function persistPopupError(source, err) {
+    const message = err && err.message ? err.message : String(err);
+    console.error("[RLB popup]", source, message);
+    try {
+      chrome.storage.local.get(["errorLog"], (r) => {
+        const ERROR_LOG_MAX = 200;
+        const entry = { ts: Date.now(), source: source, message: message, stack: (err && err.stack) || null };
+        const next = (r.errorLog || []).concat(entry).slice(-ERROR_LOG_MAX);
+        chrome.storage.local.set({ errorLog: next });
+      });
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  window.addEventListener("error", (event) => persistPopupError("popup/uncaught", event.error || event.message));
+  window.addEventListener("unhandledrejection", (event) => persistPopupError("popup/unhandledrejection", event.reason));
+
   const DEFAULTS = {
     relayBase: "https://relay.amazon.co.uk",
     ontrackUrl: "https://ontrack-api.agilecyber.com/api/v1/rlb-locations",
@@ -340,10 +360,21 @@
     );
   }
 
+  function logTriggerError(job, messageType, err) {
+    console.error("[RLB popup] trigger failed:", messageType, err);
+    chrome.storage.local.get(["errorLog"], (r) => {
+      const ERROR_LOG_MAX = 200;
+      const entry = { ts: Date.now(), source: "popup/trigger/" + messageType, message: err, context: { job: job } };
+      const next = (r.errorLog || []).concat(entry).slice(-ERROR_LOG_MAX);
+      chrome.storage.local.set({ errorLog: next });
+    });
+  }
+
   function send(messageType) {
     chrome.runtime.sendMessage({ type: messageType }, () => {
       if (chrome.runtime.lastError) {
         appendLog("loads", { msg: "Error: " + chrome.runtime.lastError.message, level: "error", ts: Date.now() });
+        logTriggerError("loads", messageType, chrome.runtime.lastError.message);
       }
     });
   }
@@ -387,6 +418,7 @@
     chrome.runtime.sendMessage({ type: messageType }, () => {
       if (chrome.runtime.lastError) {
         appendLog(job, { msg: "Error: " + chrome.runtime.lastError.message, level: "error", ts: Date.now() });
+        logTriggerError(job, messageType, chrome.runtime.lastError.message);
       }
     });
   }

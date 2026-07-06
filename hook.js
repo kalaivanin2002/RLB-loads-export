@@ -19,6 +19,18 @@
     window.postMessage({ source: "RLB_CSRF", name: String(name), token: String(value) }, "*");
   }
 
+  // Surface intercepted-request failures to the ISOLATED world (bridge.js),
+  // which persists them via chrome.storage — this MAIN-world script has no
+  // extension API access, and console output here is lost once DevTools closes
+  // or the page reloads.
+  function reportError(tag, detail) {
+    try {
+      window.postMessage({ source: "RLB_ERROR", tag: String(tag), detail: detail || null }, "*");
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
   // Slim a loadboard/search response down to the fields the planner needs, then
   // post it to the ISOLATED world (the raw response is ~600KB — never ship it whole).
   function slimSearch(data) {
@@ -109,6 +121,9 @@
       if (isEntitiesCall || isSearchCall) {
         var tag = isSearchCall ? "search" : "entities";
         return promise.then(function (response) {
+          if (!response.ok) {
+            reportError("fetch:" + tag, { url: url, status: response.status, statusText: response.statusText });
+          }
           return response.text().then(function (text) {
             try {
               var data = JSON.parse(text);
@@ -116,6 +131,9 @@
               else postSearch(data);
             } catch (e) {
               console.log("[RLB hook] " + tag + " body not usable (len " + (text ? text.length : 0) + ")");
+              if (!response.ok) {
+                reportError("fetch:" + tag + ":parse", { url: url, status: response.status, body: (text || "").slice(0, 300) });
+              }
             }
             // Rebuild an equivalent Response so the page's own code still works.
             try {
@@ -125,6 +143,7 @@
             }
           }).catch(function (err) {
             console.log("[RLB hook] " + tag + " original read failed:", err && err.name);
+            reportError("fetch:" + tag + ":readFailed", { url: url, name: err && err.name, message: err && err.message });
             return response; // couldn't read — give the page back the original
           });
         });
@@ -157,15 +176,29 @@
         // Use addEventListener so the page reassigning onreadystatechange can't
         // clobber our handler (the reason interception was silently failing).
         this.addEventListener("load", function () {
+          if (this.status < 200 || this.status >= 300) {
+            reportError("xhr:" + (isEntitiesCall ? "entities" : "search"), {
+              url: url,
+              status: this.status,
+              body: (this.responseText || "").slice(0, 300),
+            });
+            return;
+          }
           try {
-            if (this.status >= 200 && this.status < 300 && this.responseText) {
+            if (this.responseText) {
               const data = JSON.parse(this.responseText);
               if (isEntitiesCall) window.postMessage({ source: "RLB_ENTITIES", entities: data }, "*");
               else postSearch(data);
             }
           } catch (e) {
-            /* non-JSON or parse error — ignore */
+            reportError("xhr:" + (isEntitiesCall ? "entities" : "search") + ":parse", {
+              url: url,
+              message: e && e.message,
+            });
           }
+        });
+        this.addEventListener("error", function () {
+          reportError("xhr:" + (isEntitiesCall ? "entities" : "search") + ":networkError", { url: url });
         });
       }
       return origOpen.apply(this, arguments);
