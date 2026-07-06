@@ -98,6 +98,22 @@
   const origFetch = window.fetch;
   if (typeof origFetch === "function") {
     window.fetch = function (input, init) {
+      // Requests the extension itself issues in this world (background's
+      // executeScript helpers) carry this marker. Pass them through untouched:
+      // scanning them would capture OUR OWN token header and write it back to
+      // storage — re-poisoning the cache with a bad token right after
+      // background cleared it (the reason a failed token could never heal).
+      try {
+        var mh = init && init.headers;
+        if (mh && typeof mh === "object" && !Array.isArray(mh) &&
+            !(typeof Headers !== "undefined" && mh instanceof Headers) &&
+            mh["x-rlb-internal"]) {
+          delete mh["x-rlb-internal"]; // never send the marker to the server
+          return origFetch.apply(this, arguments);
+        }
+      } catch (e) {
+        /* ignore */
+      }
       try {
         if (init && init.headers) scanHeaders(init.headers);
         if (input && typeof input === "object" && input.headers) scanHeaders(input.headers);

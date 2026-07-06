@@ -599,10 +599,7 @@ function buildSearchPayload(loc, cfg, dateWindow) {
 
 async function searchLoadsInPage(tabId, cfg, payload, csrf) {
   const url = cfg.relayBase.replace(/\/+$/, "") + "/api/loadboard/search";
-  const headers = { "Content-Type": "application/json", Accept: "application/json" };
-  if (csrf && csrf.token) {
-    headers[csrf.headerName || "anti-csrftoken-a2z"] = csrf.token;
-  }
+  const headers = applyCsrfHeader({ "Content-Type": "application/json", Accept: "application/json" }, csrf);
   const r = await runInPage(tabId, url, {
     method: "POST",
     credentials: "include",
@@ -810,6 +807,48 @@ async function resolveCsrf(tabId) {
     }
   } catch (e) {
     /* fall through */
+  }
+  return null;
+}
+
+// Attach the CSRF token under Relay's canonical header name AND the captured
+// one. The page-scrape fallback can store a non-standard name (e.g. a meta tag
+// called "csrf-token"); sending only that name makes Relay answer
+// HTTP 400 {"defaultErrorMessage":"No CSRF token present!"}.
+function applyCsrfHeader(headers, csrf) {
+  // Marker for hook.js: this fetch is OURS — don't capture its CSRF header
+  // (that would write our own, possibly rejected, token back into storage,
+  // re-poisoning the cache right after we cleared it) and don't intercept its
+  // response. hook.js strips the marker before the request is sent.
+  headers["x-rlb-internal"] = "1";
+  if (!csrf || !csrf.token) return headers;
+  headers["anti-csrftoken-a2z"] = csrf.token;
+  if (csrf.headerName && csrf.headerName.toLowerCase() !== "anti-csrftoken-a2z") {
+    headers[csrf.headerName] = csrf.token;
+  }
+  return headers;
+}
+
+// Recover a trustworthy CSRF token: open the in-transit Trips page — its own
+// entitiesV2 call carries the token the server actually accepts, which hook.js
+// captures into storage — and wait for that capture. Returns the fresh token
+// or null on timeout.
+async function captureFreshCsrf(cfg) {
+  const t0 = Date.now();
+  const baseUrl = cfg.relayBase.replace(/\/+$/, "");
+  try {
+    chrome.windows.create({ url: baseUrl + "/tours/in-transit?ref=owp_nav_tours" }, function () {
+      if (chrome.runtime.lastError) console.error("[RLB] Failed to open trips window for CSRF capture:", chrome.runtime.lastError);
+    });
+  } catch (e) {
+    return null;
+  }
+  while (Date.now() - t0 < 25000) {
+    await sleep(700);
+    const s = await chrome.storage.local.get(["csrfToken", "csrfHeaderName", "csrfCapturedAt"]);
+    if (s.csrfToken && s.csrfCapturedAt && s.csrfCapturedAt > t0) {
+      return { token: s.csrfToken, headerName: s.csrfHeaderName || "anti-csrftoken-a2z" };
+    }
   }
   return null;
 }
@@ -1099,7 +1138,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 // Refresh the date bounds in a captured entitiesV2 payload so the trip window
 // stays current (broad: now-30d … now+180d). Returns a fresh clone.
-function freshenDates(payload) {
+// keepOriginalSize: leave pagination.size as captured — used as a fallback when
+// the server 500s on the raised size (see fetchEntitiesFresh).
+function freshenDates(payload, keepOriginalSize) {
   const clone = JSON.parse(JSON.stringify(payload));
   const lte = new Date(Date.now() + 180 * 86400000).toISOString();
   const gte = new Date(Date.now() - 30 * 86400000).toISOString();
@@ -1108,7 +1149,7 @@ function freshenDates(payload) {
     if (o && typeof o === "object") {
       // Raise the page size so trips can't be truncated (the captured payload
       // caps at 100, which silently drops trips for larger fleets).
-      if (o.pagination && typeof o.pagination === "object") o.pagination.size = 500;
+      if (!keepOriginalSize && o.pagination && typeof o.pagination === "object") o.pagination.size = 500;
       for (const k of Object.keys(o)) {
         if (k === "lte" && typeof o[k] === "string") o[k] = lte;
         else if (k === "gte" && typeof o[k] === "string") o[k] = gte;
@@ -1125,9 +1166,9 @@ function pageFetchTrips(url, init) {
   return fetch(url, init)
     .then(function (r) {
       return r.text().then(function (t) {
-        if (!r.ok) return { ok: false, status: r.status, entities: [] };
+        if (!r.ok) return { ok: false, status: r.status, body: (t || "").slice(0, 300), entities: [] };
         var data;
-        try { data = JSON.parse(t); } catch (e) { return { ok: false, status: r.status, parseError: true, entities: [] }; }
+        try { data = JSON.parse(t); } catch (e) { return { ok: false, status: r.status, parseError: true, body: (t || "").slice(0, 300), entities: [] }; }
         var ents = data && Array.isArray(data.entities) ? data.entities : [];
         var slimLoc = function (loc, pt) {
           if (!loc) return null;
@@ -1201,8 +1242,7 @@ function pageFetchTrips(url, init) {
 
 async function fetchEntities(tabId, cfg, csrf, payload) {
   const url = cfg.relayBase.replace(/\/+$/, "") + "/api/tours/entitiesV2";
-  const headers = { "Content-Type": "application/json", Accept: "application/json" };
-  if (csrf && csrf.token) headers[csrf.headerName || "anti-csrftoken-a2z"] = csrf.token;
+  const headers = applyCsrfHeader({ "Content-Type": "application/json", Accept: "application/json" }, csrf);
   const res = await chrome.scripting.executeScript({
     target: { tabId: tabId },
     func: pageFetchTrips,
@@ -1216,19 +1256,50 @@ async function fetchEntities(tabId, cfg, csrf, payload) {
     throw err;
   }
   if (!r.ok) {
-    const err = new Error("entitiesV2 HTTP " + r.status + (r.parseError ? " (parse error)" : "") + (r.error ? " " + r.error : ""));
+    const err = new Error(
+      "entitiesV2 HTTP " + r.status +
+      (r.parseError ? " (parse error)" : "") +
+      (r.error ? " " + r.error : "") +
+      (r.body ? " — " + r.body : "")
+    );
     err.status = r.status;
-    await logError("background/fetchEntities", err, { url: url, status: r.status, parseError: !!r.parseError });
-    // A stale/invalid CSRF token typically surfaces as 401/403, but Relay's
-    // edge sometimes maps an expired session to a bare 500 too. Clear the
-    // cached token so the next refresh attempt re-derives it from the page
-    // instead of retrying the same failing token forever.
-    if (r.status === 401 || r.status === 403 || r.status === 500) {
+    err.body = r.body || null;
+    await logError("background/fetchEntities", err, { url: url, status: r.status, parseError: !!r.parseError, body: r.body || null });
+    // A bad CSRF token surfaces as 401/403, or as a 400 whose body names CSRF
+    // ("No CSRF token present!"). Clear the cached token in those cases so the
+    // next attempt re-derives it from the page instead of resending the same
+    // rejected one forever. Do NOT clear on a plain 500: that's a server-side
+    // rejection of the request itself (e.g. pagination.size too large).
+    if (r.status === 401 || r.status === 403 || /csrf/i.test(r.body || "")) {
       await chrome.storage.local.remove(["csrfToken", "csrfHeaderName", "csrfCapturedAt"]);
     }
     throw err;
   }
   return r.entities || [];
+}
+
+// entitiesV2 rejects a raised pagination.size with a bare HTTP 500 on some
+// accounts. Try with the raised size first (avoids truncation for large
+// fleets); if the server 500s, retry once with the captured payload's original
+// size so the refresh still succeeds.
+async function fetchEntitiesFresh(tabId, cfg, csrf, payload) {
+  try {
+    return await fetchEntities(tabId, cfg, csrf, freshenDates(payload));
+  } catch (e) {
+    if (e && e.status === 500) {
+      await logError("background/fetchEntitiesFresh", e, { note: "HTTP 500 with raised pagination.size — retrying with the payload's original size" });
+      return await fetchEntities(tabId, cfg, csrf, freshenDates(payload, true));
+    }
+    if (e && e.body && /csrf/i.test(e.body)) {
+      // The cached token was rejected (fetchEntities already cleared it). The
+      // only token the server reliably accepts is the one the Relay page
+      // itself sends — open the Trips page so hook.js captures it, retry once.
+      await logError("background/fetchEntitiesFresh", e, { note: "CSRF rejected — opening Trips page to capture a fresh token, then retrying" });
+      const fresh = await captureFreshCsrf(cfg);
+      if (fresh) return await fetchEntities(tabId, cfg, fresh, freshenDates(payload));
+    }
+    throw e;
+  }
 }
 
 // Build per-driver availability using the NEXT FREE GAP: each driver's trips
@@ -1567,11 +1638,11 @@ async function runPlanner() {
     }
 
     await log("planner", "Fetching in-transit trips…");
-    const inTransit = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.inTransit));
+    const inTransit = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.inTransit);
     await log("planner", "In-transit entities: " + inTransit.length);
 
     await log("planner", "Fetching upcoming trips…");
-    const upcoming = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.upcoming));
+    const upcoming = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.upcoming);
     await log("planner", "Upcoming entities: " + upcoming.length);
 
     const availability = buildAvailability(inTransit.concat(upcoming), cfg);
@@ -1750,14 +1821,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // actually do, since "HTTP 500" alone gives no next step.
 function describeFetchEntitiesError(e, which) {
   const status = e && e.status;
+  const serverMsg = e && e.body ? " Server said: " + e.body : "";
+  if (e && e.body && /csrf/i.test(e.body)) {
+    return "Relay rejected the " + which + " request (HTTP " + status + ") — the CSRF token was not accepted, and capturing a fresh one from the Trips page also failed. Make sure you're signed in to Relay, let the opened Trips window finish loading, then retry." + serverMsg;
+  }
   if (status === 401 || status === 403) {
-    return "Relay rejected the request (HTTP " + status + ", " + which + ") — your session token expired. Reload the Relay tab and sign in again, then retry.";
+    return "Relay rejected the request (HTTP " + status + ", " + which + ") — your session token expired. Reload the Relay tab and sign in again, then retry." + serverMsg;
   }
   if (status === 500) {
-    return "Relay's server returned HTTP 500 for " + which + " trips — this usually means the session token is stale. It's been cleared; reload the Relay tab, make sure you're signed in, then retry.";
+    return "Relay's server returned HTTP 500 for " + which + " trips, even after retrying with the original page size." + serverMsg;
   }
   if (status) {
-    return "Relay returned HTTP " + status + " for " + which + " trips.";
+    return "Relay returned HTTP " + status + " for " + which + " trips." + serverMsg;
   }
   return (e && e.message) || String(e);
 }
@@ -1770,22 +1845,24 @@ async function refreshAvailabilityOnly() {
   if (!csrf) return { ok: false, error: "No CSRF token — reload the Relay tab." };
   let inTransit, upcoming;
   try {
-    inTransit = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.inTransit));
+    inTransit = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.inTransit);
   } catch (e) {
     return { ok: false, error: describeFetchEntitiesError(e, "in-transit") };
   }
-  const baseUrl = cfg.relayBase.replace(/\/+$/, "");
-  chrome.windows.create({ url: baseUrl + "/tours/in-transit?ref=owp_nav_tours" }, function(w) {
-    if (chrome.runtime.lastError) console.error("[RLB] Failed to open in-transit window:", chrome.runtime.lastError);
-  });
   try {
-    upcoming = await fetchEntities(tab.id, cfg, csrf, freshenDates(self.RLB_PAYLOADS.upcoming));
+    upcoming = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.upcoming);
   } catch (e) {
     return { ok: false, error: describeFetchEntitiesError(e, "upcoming") };
   }
-  chrome.windows.create({ url: baseUrl + "/tours/upcoming?ref=owp_nav_tours" }, function(w) {
-    if (chrome.runtime.lastError) console.error("[RLB] Failed to open upcoming window:", chrome.runtime.lastError);
-  });
+  // NOTE: this used to also pop open in-transit/upcoming windows here for the
+  // user to see. Removed: entitiesV2 data above is already fetched headlessly
+  // via scripting, so those windows were purely cosmetic — but they steal OS
+  // focus from the load-board tab, and the very next step (autopilot typing
+  // into the origin combobox) would then silently fail because the tab wasn't
+  // the focused/active one. That was the cause of "1st run finds 0 loads,
+  // origin box empty, 2nd run works" — it only ever happened on a cold run
+  // (the one that calls this function) and never on a warm run (which skips
+  // straight to searching with cached availability).
   const availability = buildAvailability(inTransit.concat(upcoming), cfg);
   await chrome.storage.local.set({ plannerAvailability: availability, plannerAvailabilityAt: Date.now() });
   return { ok: true, count: availability.length };

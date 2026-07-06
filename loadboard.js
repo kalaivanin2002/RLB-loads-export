@@ -63,8 +63,8 @@
       "#rlb-tip tr.b td{color:#4ade80;font-weight:600;}",
       // Hero launcher button (top-right, near the search).
       "#rlb-launch,#rlb-launch *{box-sizing:border-box;}",
-      "#rlb-launch{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:linear-gradient(135deg,#2563eb,#4f46e5);color:#fff;border:none;border-radius:999px;padding:12px 20px;font:700 14px/1 -apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:0 8px 22px rgba(37,99,235,.42);transition:transform .1s ease,box-shadow .2s ease;}",
-      "#rlb-launch:hover{transform:translateY(-1px);box-shadow:0 10px 28px rgba(37,99,235,.52);}",
+      "#rlb-launch{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:rgb(0,104,141);color:#fff;border:none;border-radius:4px;padding:12px 20px;font:500 14px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:none;transition:background-color .15s ease;}",
+      "#rlb-launch:hover{background:rgb(0,88,120);}",
       "#rlb-launch:disabled{cursor:default;}",
       "#rlb-launch .bolt{font-size:16px;}",
       "#rlb-launch.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
@@ -439,10 +439,27 @@
     var input = originInput();
     if (!input) return Promise.reject(new Error("origin input not found"));
     input.focus();
+    realClick(input); // a cold combobox may only open its listbox on a real click
     nativeSetValue(input, city);
     return waitFor(function () { return bestOption(city); }, 5000, 150).then(function (opt) {
       realClick(opt);
       return delay(400); // typing the next city overwrites the text; no manual clear
+    });
+  }
+
+  // First query after a page load is often cold (autocomplete backend + lazy
+  // UI chunks), so a single attempt can time out even though the very next one
+  // succeeds — retype once before giving up. Resolves true/false, never rejects.
+  function selectOriginWithRetry(city) {
+    return selectOneOrigin(city).then(function () { return true; }, function (e1) {
+      console.log("[RLB fill] retrying", city, "(" + ((e1 && e1.message) || e1) + ")");
+      return delay(600).then(function () { return selectOneOrigin(city); }).then(
+        function () { return true; },
+        function (e2) {
+          logError("fillBatch/selectOrigin", e2, { city: city });
+          return false;
+        }
+      );
     });
   }
 
@@ -546,18 +563,61 @@
   // Fill a batch of cities, then trigger the search once. We close the origin
   // dropdown before touching equipment (a stuck-open dropdown swallows the click),
   // and close overlays again before pressing Search loads.
-  function fillBatch(cities) {
+  // How many of the batch's cities are visibly selected in the origin box.
+  // Clicking a suggestion can silently not stick on a cold form, so we check
+  // the DOM (box text or input value) rather than trusting the click.
+  function countOriginsSelected(cities) {
+    var input = originInput();
+    var box = (input && (input.closest("#rlb-origin-city-filter") || input.parentElement)) ||
+      document.getElementById("rlb-origin-city-filter");
+    var txt = (((box && box.textContent) || "") + " " + ((input && input.value) || "")).toLowerCase();
+    return cities.filter(function (c) { return txt.indexOf(String(c).toLowerCase()) !== -1; }).length;
+  }
+
+  // Reset the form and fill the origin cities. Resolves with
+  // { clicked: <suggestions clicked>, verified: <cities visible in the box> }.
+  function fillOrigins(cities) {
     return resetForm().then(function () {
+      // "New search" mounts the form lazily — on the first run after a page
+      // load the fixed post-click delay isn't enough, so wait until the origin
+      // combobox actually exists before typing into it.
+      return waitFor(originInput, 8000, 200).catch(function () {
+        throw new Error("The search form didn't finish loading (origin box never appeared). Reload the page and try again.");
+      });
+    }).then(function () {
+      var clicked = 0;
       var chain = Promise.resolve();
       cities.forEach(function (c) {
         chain = chain.then(function () {
-          return selectOneOrigin(c).catch(function (e) {
-            console.log("[RLB fill] could not select", c, e && e.message);
-          });
+          return selectOriginWithRetry(c).then(function (ok) { if (ok) clicked++; });
         });
       });
-      return chain;
-    }).then(function () {
+      return chain.then(function () { return delay(300); }).then(function () {
+        return { clicked: clicked, verified: countOriginsSelected(cities) };
+      });
+    });
+  }
+
+  function fillBatch(cities) {
+    return fillOrigins(cities).then(function (r) {
+      if (r.verified > 0) return r;
+      // Nothing stuck (typical on the first run after a page load, while the
+      // form is still cold) — redo the whole fill once before giving up.
+      console.log("[RLB fill] no origins stuck (clicked " + r.clicked + ") — redoing the fill once");
+      return fillOrigins(cities);
+    }).then(function (r) {
+      // Never search with an empty origin: Relay would return 0 results and
+      // the card would report a misleading "0 loads match your drivers".
+      if (!r.verified && !r.clicked) {
+        throw new Error("Couldn't select any origin city — the page's autocomplete didn't respond. Click the launcher to try again.");
+      }
+      if (!r.verified) {
+        // Suggestions were clicked but we can't see them in the box — possibly
+        // just a rendering difference, so proceed rather than hard-fail.
+        console.log("[RLB fill] origins clicked (" + r.clicked + ") but not visible in the box — proceeding");
+      } else if (r.verified < cities.length) {
+        console.log("[RLB fill] only " + r.verified + "/" + cities.length + " origin cities selected — searching with those");
+      }
       return closeOverlays(); // dismiss the origin dropdown before Equipment
     }).then(function () {
       return setEquipment(); // New search clears equipment; restore it or search blanks
