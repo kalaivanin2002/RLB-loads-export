@@ -1149,7 +1149,7 @@ function freshenDates(payload, keepOriginalSize) {
     if (o && typeof o === "object") {
       // Raise the page size so trips can't be truncated (the captured payload
       // caps at 100, which silently drops trips for larger fleets).
-      if (!keepOriginalSize && o.pagination && typeof o.pagination === "object") o.pagination.size = 500;
+      if (!keepOriginalSize && o.pagination && typeof o.pagination === "object") o.pagination.size = 100;
       for (const k of Object.keys(o)) {
         if (k === "lte" && typeof o[k] === "string") o[k] = lte;
         else if (k === "gte" && typeof o[k] === "string") o[k] = gte;
