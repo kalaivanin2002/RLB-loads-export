@@ -1929,4 +1929,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     return true;
   }
+
+  if (msg && msg.type === "get-relay-csrf-token") {
+    chrome.storage.local.get(["relayCsrfToken", "relayCsrfTokenUpdatedAt"], (result) => {
+      sendResponse({
+        ok: true,
+        token: result.relayCsrfToken || "",
+        updatedAt: result.relayCsrfTokenUpdatedAt || null,
+      });
+    });
+    return true;
+  }
 });
