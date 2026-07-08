@@ -101,7 +101,8 @@
       "#rlb-card .adv .tools{display:flex;flex-direction:column;gap:6px;margin-top:8px;}",
       "#rlb-card .adv .tools button{width:100%;background:#f1f5f9;color:#334155;border:none;border-radius:8px;padding:9px;font:600 12px/1 inherit;cursor:pointer;}",
       // Flash outline used when stepping through matched loads (data-attr = React-safe).
-      "[data-rlb-flash]{outline:3px solid #16a34a!important;outline-offset:-3px;}",
+      // Matches the launcher button's teal so it reads as "this extension" feedback.
+      "[data-rlb-flash]{outline:3px solid rgb(0,104,141)!important;outline-offset:-3px;}",
       // Drivers verification overlay (spot-check computed drop-offs vs Relay).
       "#rlb-drivers{position:fixed;top:60px;left:16px;z-index:2147483200;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.28);font:12px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;width:560px;max-width:92vw;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;}",
       "#rlb-drivers .t{background:#0f172a;color:#fff;font-weight:700;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;cursor:move;}",
@@ -317,14 +318,16 @@
     document.addEventListener("mouseup", function () { drag = null; });
   }
 
-  // ── Phase 2: auto-fill origins & search, in rounds of 5 ─────────────────────────
-  // Origin box allows max 5 cities. We dedupe driver drop-off cities, sort by
-  // soonest-free, and work through them 5 at a time: reset the form (New search),
-  // type + pick each city from the autocomplete, then click "Search loads" once.
-  // "Next 5" advances to the following batch. Every search is then highlighted by
-  // the existing Phase-1 engine. One search per round keeps it human-paced.
-  var ROUND_SIZE = 5;
-  var batches = [];   // [[{city,country,drivers[],soonest}, …up to 5], …]
+  // ── Phase 2: auto-fill origin & search, one round per driver drop-off city ──────
+  // We dedupe driver drop-off cities and sort by soonest-free, then search them
+  // one at a time, all in THIS browser tab: each round clicks Load Board's own
+  // "+ New search" button (see resetForm) to get a clean origin box, types +
+  // picks that one city from the autocomplete, clicks "Search loads", and shows
+  // its result — so every city gets its own search (instead of being combined
+  // into one multi-origin search) and its own Load Board search tab (instead of
+  // a separate Chrome browser tab), switchable via the chips at the top of the
+  // search panel.
+  var batches = [];   // [[{city,country}], [{city,country}], …] — one city per round
   var roundIdx = 0;
   var autofillBusy = false;
 
@@ -389,28 +392,38 @@
     });
   }
 
-  function findSearchButton() {
-    var bs = document.querySelectorAll("button");
-    for (var i = 0; i < bs.length; i++) {
-      var t = (bs[i].textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
-      if (t === "search loads" || t.indexOf("search loads") !== -1) return bs[i];
-    }
-    return null;
+  // A tab that's been sitting open across repeated test runs accumulates its
+  // own stray "New search" sessions in Relay's UI (visible as extra chips at
+  // the top of the search panel) — Relay appears to keep each one's DOM
+  // mounted, so a plain querySelector can silently grab a HIDDEN previous
+  // session's input/button instead of the one actually on screen. Prefer a
+  // visible match; fall back to the first match if nothing is visible.
+  function isVisible(el) {
+    return !!(el && el.offsetParent !== null);
+  }
+  function firstVisible(selector) {
+    var els = document.querySelectorAll(selector);
+    for (var i = 0; i < els.length; i++) { if (isVisible(els[i])) return els[i]; }
+    return els[0] || null;
   }
 
-  function findButtonByText(txt) {
+  function findSearchButton() {
     var bs = document.querySelectorAll("button");
+    var fallback = null;
     for (var i = 0; i < bs.length; i++) {
-      var t = (bs[i].textContent || "").replace(/\s+/g, " ").trim();
-      if (t === txt) return bs[i];
+      var t = (bs[i].textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (t === "search loads" || t.indexOf("search loads") !== -1) {
+        if (isVisible(bs[i])) return bs[i];
+        if (!fallback) fallback = bs[i];
+      }
     }
-    return null;
+    return fallback;
   }
 
   function originInput() {
-    return document.querySelector('#rlb-origin-city-filter input[role=combobox]') ||
-      document.querySelector('input[role=combobox][aria-labelledby*="origin"]') ||
-      document.querySelector('input[role=combobox][aria-autocomplete="list"]');
+    return firstVisible('#rlb-origin-city-filter input[role=combobox]') ||
+      firstVisible('input[role=combobox][aria-labelledby*="origin"]') ||
+      firstVisible('input[role=combobox][aria-autocomplete="list"]');
   }
 
   // Choose the best autocomplete option for a city. Typing "War" returns matches
@@ -420,6 +433,7 @@
     var opts = document.querySelectorAll('[role="option"][aria-label]');
     var best = null, bestRank = 99;
     for (var i = 0; i < opts.length; i++) {
+      if (!isVisible(opts[i])) continue; // skip options left over from a stale/hidden popover
       var al = (opts[i].getAttribute("aria-label") || "").trim();
       var l = al.toLowerCase();
       if (l === "your location" || !l) continue;
@@ -463,11 +477,30 @@
     });
   }
 
-  // Reset to a clean form (empty origins) via "New search". On a fresh form the
-  // board does NOT auto-search until we click "Search loads", so we get exactly
-  // one search per round.
+  // The "+ New search" button that opens a fresh Load Board search tab isn't
+  // uniquely identifiable by its CSS class — Relay reuses the same generated
+  // class (e.g. "css-pevixi") on an unrelated button ("no-results__create-pat-
+  // link", shown on a zero-results page). Match by exact visible text instead,
+  // and explicitly skip anything whose class marks it as that other button.
+  function findNewSearchButton() {
+    var bs = document.querySelectorAll("button");
+    var fallback = null;
+    for (var i = 0; i < bs.length; i++) {
+      var t = (bs[i].textContent || "").replace(/\s+/g, " ").trim();
+      if (t !== "New search") continue;
+      if (/no-results/i.test(bs[i].className || "")) continue; // the other "New search"-labelled button
+      if (isVisible(bs[i])) return bs[i];
+      if (!fallback) fallback = bs[i];
+    }
+    return fallback;
+  }
+
+  // Reset to a clean form (empty origins) via Load Board's own "+ New search"
+  // button — this opens a fresh internal search tab rather than reusing the
+  // current one. On a fresh form the board does NOT auto-search until we click
+  // "Search loads", so we get exactly one search per round.
   function resetForm() {
-    var nb = findButtonByText("New search");
+    var nb = findNewSearchButton();
     if (nb) { nb.click(); return delay(900); }
     return Promise.resolve();
   }
@@ -635,8 +668,9 @@
     });
   }
 
-  // Group drivers into batches of ≤5 unique drop-off cities, soonest-free first.
-  function buildBatches(list) {
+  // Dedupe drivers down to their unique drop-off cities, soonest-free first —
+  // one entry per city, one round per entry.
+  function buildCityList(list) {
     var byCity = {};
     list.forEach(function (a) {
       var fl = a.freeLocation || {};
@@ -649,9 +683,7 @@
     });
     var cities = Object.keys(byCity).map(function (k) { return byCity[k]; });
     cities.sort(function (a, b) { return a.soonest - b.soonest; });
-    var out = [];
-    for (var i = 0; i < cities.length; i += ROUND_SIZE) out.push(cities.slice(i, i + ROUND_SIZE));
-    return out;
+    return cities;
   }
 
   // ── autopilot: fetch drivers → search a batch → show matches → pause ────────────
@@ -701,6 +733,7 @@
     });
   }
 
+  // Steps shown while a round's fetch/search/match sequence runs.
   function autopilotSteps(fromSearch) {
     return [
       { label: "Fetching driver details", state: fromSearch ? "done" : "active" },
@@ -740,6 +773,11 @@
     });
   }
 
+  // Fetch/read driver availability, then search every unique driver drop-off
+  // city one round at a time, all in THIS tab: each round gets its own Load
+  // Board "+ New search" tab (see resetForm), so results for every city stay
+  // one click away via the chips at the top of the search panel — no separate
+  // Chrome browser tabs involved.
   function runAutopilot(force) {
     if (autofillBusy) return;
     autofillBusy = true;
@@ -756,10 +794,12 @@
       }
       driverCount = meta.count; driverAt = meta.at;
       return getAvailability().then(function (list) {
-        batches = buildBatches(list);
+        var cities = buildCityList(list);
+        if (!cities.length) { cardError("No drivers to search from.", "None of your drivers had a usable drop-off location (Advanced → View drivers)."); return null; }
+
+        batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
         roundIdx = 0;
-        if (!batches.length) { cardError("No drivers to search from.", "None of your drivers had a usable drop-off location (Advanced → View drivers)."); return null; }
-        return runAutoRound(steps);
+        return runAllRounds(steps, cities);
       });
     }).catch(function (e) {
       logError("runAutopilot", e);
@@ -770,10 +810,43 @@
     });
   }
 
+  // Run every city's round back-to-back. showRoundResult overwrites the card
+  // with each round's own result as it completes; once the last one is done,
+  // append a summary noting every location that was searched (each has its
+  // own Load Board search tab by then).
+  function runAllRounds(steps, cities) {
+    return runAutoRound(steps).then(function () {
+      if (roundIdx + 1 >= batches.length) {
+        if (cities.length > 1) announceOtherRounds(cities);
+        return;
+      }
+      roundIdx++;
+      var nextSteps = autopilotSteps(true);
+      renderSteps(nextSteps);
+      return runAllRounds(nextSteps, cities);
+    });
+  }
+
+  // Append a note to the (already-shown) final round's result card listing
+  // every location searched, without disturbing the match results / buttons
+  // showRoundResult already rendered and wired up.
+  function announceOtherRounds(cities) {
+    var host = document.getElementById("rlb-card-content");
+    if (!host) return;
+    var html =
+      '<div class="note">Searched ' + cities.length + " driver locations (" +
+      esc(cities.map(function (c) { return c.city; }).join(", ")) +
+      ") — each has its own “New search” tab at the top of the page. Switch tabs to see each one’s matches.</div>";
+    var adv = host.querySelector(".adv");
+    if (adv) adv.insertAdjacentHTML("beforebegin", html);
+    else host.insertAdjacentHTML("beforeend", html);
+  }
+
   function runAutoRound(steps) {
     var cities = batches[roundIdx].map(function (b) { return b.city; });
     steps[2].state = "active";
-    steps[2].label = "Searching loads near your drivers (round " + (roundIdx + 1) + " of " + batches.length + ")";
+    steps[2].label = "Searching loads near " + cities.join(", ") +
+      (batches.length > 1 ? " (" + (roundIdx + 1) + " of " + batches.length + ")" : "");
     steps[3].state = "pending";
     renderSteps(steps);
     var scoreP = nextScore(); // arm BEFORE the search fires
@@ -813,30 +886,26 @@
 
   function showRoundResult(cities) {
     var n = countHighlighted();
-    var more = roundIdx + 1 < batches.length;
+    var roundLabel = batches.length > 1 ? ("Location " + (roundIdx + 1) + " of " + batches.length + " · ") : "";
     setCard(
       '<div class="result' + (n ? "" : " zero") + '">' +
       '<div class="n">' + n + "</div>" +
       '<div class="lbl">' + (n === 1 ? "load matches your drivers" : "loads match your drivers") + "</div>" +
-      '<div class="rnd">Round ' + (roundIdx + 1) + " of " + batches.length + " · " + esc(cities.join(", ")) + "</div>" +
+      '<div class="rnd">' + roundLabel + esc(cities.join(", ")) + "</div>" +
       "</div>" +
       '<div class="actions">' +
       (n ? '<button class="primary" id="rlb-a-step">Show matches ▸</button>' : "") +
-      (more ? '<button class="' + (n ? "ghost" : "primary") + '" id="rlb-a-next">Next 5 areas →</button>' : "") +
       '<button class="ghost" id="rlb-a-done">Done</button>' +
       "</div>" +
       '<div class="note' + (isStale(driverAt) ? " stale" : "") + '">Drivers as of ' + esc(dtUK(driverAt)) +
-      (isStale(driverAt) ? " · may be out of date — Advanced → Refresh drivers" : "") +
-      (more ? "" : " · all areas covered") + "</div>" +
+      (isStale(driverAt) ? " · may be out of date — Advanced → Refresh drivers" : "") + "</div>" +
       advancedHtml()
     );
     matchList = [].slice.call(document.querySelectorAll("[data-rlb-match]"));
     matchPos = 0;
     var step = document.getElementById("rlb-a-step");
-    var next = document.getElementById("rlb-a-next");
     var done = document.getElementById("rlb-a-done");
     if (step) step.addEventListener("click", stepMatch);
-    if (next) next.addEventListener("click", nextRound);
     if (done) done.addEventListener("click", hideCard);
     wireAdvanced();
   }
@@ -858,22 +927,6 @@
     setTimeout(function () { el.removeAttribute("data-rlb-flash"); }, 1800);
     var s = document.getElementById("rlb-a-step");
     if (s) s.textContent = "Next match ▸ (" + (idx + 1) + "/" + els.length + ")";
-  }
-
-  function nextRound() {
-    if (autofillBusy) return;
-    if (roundIdx + 1 >= batches.length) return;
-    roundIdx++;
-    autofillBusy = true;
-    setLaunchBusy(true);
-    var steps = autopilotSteps(true);
-    renderSteps(steps);
-    runAutoRound(steps).catch(function (e) {
-      cardError("Something went wrong.", (e && e.message) ? e.message : String(e));
-    }).then(function () {
-      setLaunchBusy(false);
-      autofillBusy = false;
-    });
   }
 
   function cardError(title, detail) {
