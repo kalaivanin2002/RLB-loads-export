@@ -69,13 +69,13 @@
       "#rlb-launch .bolt{font-size:16px;}",
       "#rlb-launch.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
       "@keyframes rlbpulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.45;transform:scale(1.28);}}",
-      // Second hero button: same shape, distinct colour — "free drivers only".
-      "#rlb-launch-free,#rlb-launch-free *{box-sizing:border-box;}",
-      "#rlb-launch-free{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:rgb(106,66,171);color:#fff;border:none;border-radius:4px;padding:12px 20px;font:500 14px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:none;transition:background-color .15s ease;}",
-      "#rlb-launch-free:hover{background:rgb(88,52,146);}",
-      "#rlb-launch-free:disabled{cursor:default;}",
-      "#rlb-launch-free .bolt{font-size:16px;}",
-      "#rlb-launch-free.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
+      // Second hero button: same shape, distinct colour — "unassigned drivers only".
+      "#rlb-launch-unassigned,#rlb-launch-unassigned *{box-sizing:border-box;}",
+      "#rlb-launch-unassigned{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:rgb(106,66,171);color:#fff;border:none;border-radius:4px;padding:12px 20px;font:500 14px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:none;transition:background-color .15s ease;}",
+      "#rlb-launch-unassigned:hover{background:rgb(88,52,146);}",
+      "#rlb-launch-unassigned:disabled{cursor:default;}",
+      "#rlb-launch-unassigned .bolt{font-size:16px;}",
+      "#rlb-launch-unassigned.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
       // Progress / result card.
       "#rlb-card,#rlb-card *{box-sizing:border-box;}",
       "#rlb-card{position:fixed;top:122px;right:22px;width:340px;max-width:92vw;z-index:2147483000;background:#fff;border:1px solid #e5e9f0;border-radius:14px;box-shadow:0 14px 44px rgba(15,23,42,.24);font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;overflow:hidden;display:none;}",
@@ -149,17 +149,17 @@
       }
     });
 
-    var btnFree = document.createElement("button");
-    btnFree.id = "rlb-launch-free";
-    btnFree.type = "button";
-    btnFree.innerHTML = '<span class="bolt">🅵</span><span class="lbl">Find loads for free drivers</span>';
-    document.body.appendChild(btnFree);
-    btnFree.addEventListener("click", function () {
+    var btnUnassigned = document.createElement("button");
+    btnUnassigned.id = "rlb-launch-unassigned";
+    btnUnassigned.type = "button";
+    btnUnassigned.innerHTML = '<span class="bolt">U</span><span class="lbl">Find loads for unassigned drivers</span>';
+    document.body.appendChild(btnUnassigned);
+    btnUnassigned.addEventListener("click", function () {
       try {
-        runFreeDriversAutopilot();
+        runUnassignedDriversAutopilot();
       } catch (e) {
-        console.log("[RLB] launch (free) error:", e);
-        logError("launchFreeClick", e);
+        console.log("[RLB] launch (unassigned) error:", e);
+        logError("launchUnassignedClick", e);
         try { showCard(); cardError("Couldn't start", (e && e.message) ? e.message : String(e)); } catch (e2) {}
         setLaunchBusy(false);
         autofillBusy = false;
@@ -182,10 +182,10 @@
   // Anchor the floating launcher to the search panel's top-right so it reads as
   // part of the search area (we can't inject INTO the React panel without crashing
   // it, so we position a fixed button over it and keep it aligned on scroll/resize).
-  // The second ("free drivers") button sits immediately to its left, same row.
+  // The second ("unassigned drivers") button sits immediately to its left, same row.
   function positionLauncher() {
     var b = document.getElementById("rlb-launch");
-    var bf = document.getElementById("rlb-launch-free");
+    var bf = document.getElementById("rlb-launch-unassigned");
     if (!b) return;
     var anchor = document.querySelector(".search__panel") ||
       document.getElementById("rlb-origin-city-filter");
@@ -210,7 +210,7 @@
   // (of either kind) can be in flight at a time (see autofillBusy).
   function setLaunchBusy(on) {
     var b = document.getElementById("rlb-launch");
-    var bf = document.getElementById("rlb-launch-free");
+    var bf = document.getElementById("rlb-launch-unassigned");
     if (b) {
       b.classList.toggle("busy", !!on);
       b.disabled = !!on;
@@ -221,7 +221,7 @@
       bf.classList.toggle("busy", !!on);
       bf.disabled = !!on;
       var lblf = bf.querySelector(".lbl");
-      if (lblf) lblf.textContent = on ? "Working…" : "Find loads for free drivers";
+      if (lblf) lblf.textContent = on ? "Working…" : "Find loads for unassigned drivers";
     }
   }
 
@@ -248,7 +248,7 @@
     var v = document.getElementById("rlb-t-view");
     if (r) r.addEventListener("click", function () {
       // Force fresh fetch + re-run whichever flow produced this card.
-      if (lastMode === "free") runFreeDriversAutopilot();
+      if (lastMode === "unassigned") runUnassignedDriversAutopilot();
       else runAutopilot(true);
     });
     if (v) v.addEventListener("click", showDrivers);
@@ -375,7 +375,7 @@
   var batches = [];   // [[{city,country}], [{city,country}], …] — one city per round
   var roundIdx = 0;
   var autofillBusy = false;
-  var lastMode = "all"; // "all" (runAutopilot) or "free" (runFreeDriversAutopilot) — which one Advanced → Refresh drivers should re-run
+  var lastMode = "all"; // "all" (runAutopilot) or "unassigned" (runUnassignedDriversAutopilot) — which one Advanced → Refresh drivers should re-run
 
   var delay = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
 
@@ -774,15 +774,15 @@
   }
 
   // Same shape as refreshDriversAsync, but REPLACES plannerAvailability with
-  // only the free (unassigned) drivers instead of merging trip-based ones in
-  // (see background.js refreshFreeDriversOnly).
-  function refreshFreeDriversAsync() {
+  // only the unassigned drivers instead of merging trip-based ones in (see
+  // background.js refreshUnassignedDriversOnly).
+  function refreshUnassignedDriversAsync() {
     return new Promise(function (resolve) {
       try {
-        chrome.runtime.sendMessage({ type: "refresh-free-drivers" }, function (res) {
+        chrome.runtime.sendMessage({ type: "refresh-unassigned-drivers" }, function (res) {
           if (chrome.runtime.lastError || !res || !res.ok) {
             var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unknown failure";
-            logError("refreshFreeDriversAsync", msg);
+            logError("refreshUnassignedDriversAsync", msg);
             lastDriverError = msg;
             resolve(0);
             return;
@@ -791,7 +791,7 @@
           driverCount = res.count || 0; driverAt = Date.now();
           resolve(driverCount);
         });
-      } catch (e) { lastDriverError = (e && e.message) || String(e); logError("refreshFreeDriversAsync", e); resolve(0); }
+      } catch (e) { lastDriverError = (e && e.message) || String(e); logError("refreshUnassignedDriversAsync", e); resolve(0); }
     });
   }
   function getAvailability() {
@@ -879,38 +879,38 @@
     });
   }
 
-  // Same overall flow as runAutopilot, but sourced from ONLY the free
-  // (unassigned) drivers — see background.js refreshFreeDriversOnly. Always
-  // does a fresh fetch: "free right now" is a live/volatile fact that a stale
+  // Same overall flow as runAutopilot, but sourced from ONLY the unassigned
+  // drivers — see background.js refreshUnassignedDriversOnly. Always does a
+  // fresh fetch: "unassigned right now" is a live/volatile fact that a stale
   // cached mixed-availability list can't answer, so there's no cache to reuse.
-  function runFreeDriversAutopilot() {
+  function runUnassignedDriversAutopilot() {
     if (autofillBusy) return;
     autofillBusy = true;
-    lastMode = "free";
+    lastMode = "unassigned";
     showCard();
     setLaunchBusy(true);
     var steps = autopilotSteps(false);
-    steps[0].label = "Fetching free (unassigned) drivers";
+    steps[0].label = "Fetching unassigned drivers";
     renderSteps(steps);
 
-    refreshFreeDriversAsync().then(function (count) {
+    refreshUnassignedDriversAsync().then(function (count) {
       steps[0].state = "done"; steps[1].state = "done"; renderSteps(steps);
       if (!count) {
         var reason = lastDriverError ? ("Reason: " + lastDriverError + ". ") : "";
-        cardError("No free drivers found.", reason + "Every driver may currently be on a trip, or none had a resolvable domicile city.");
+        cardError("No unassigned drivers found.", reason + "Every driver may currently be on a trip, or none had a resolvable domicile city.");
         return null;
       }
       driverCount = count; driverAt = Date.now();
       return getAvailability().then(function (list) {
         var cities = buildCityList(list);
-        if (!cities.length) { cardError("No free drivers to search from.", "None of the unassigned drivers had a resolvable domicile city."); return null; }
+        if (!cities.length) { cardError("No unassigned drivers to search from.", "None of the unassigned drivers had a resolvable domicile city."); return null; }
 
         batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
         roundIdx = 0;
         return runAllRounds(steps, cities);
       });
     }).catch(function (e) {
-      logError("runFreeDriversAutopilot", e);
+      logError("runUnassignedDriversAutopilot", e);
       cardError("Something went wrong.", (e && e.message) ? e.message : String(e));
     }).then(function () {
       setLaunchBusy(false);

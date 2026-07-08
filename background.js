@@ -1837,13 +1837,13 @@ function describeFetchEntitiesError(e, which) {
   return (e && e.message) || String(e);
 }
 
-// ─── Free (unassigned) drivers ─────────────────────────────────────────────
+// ─── Unassigned drivers ─────────────────────────────────────────────────────
 // entitiesV2 (in-transit/upcoming) only ever returns drivers who ARE on a
 // trip — a driver with no trip at all is invisible to buildAvailability().
 // /api/hos/drivers returns EVERY driver on the account; a driver from that
-// list whose id isn't covered by any trip is free right now. Compare ids via
-// entities[].drivers[].id (e.g. "amzn1.relay.d.v1.T-41b3QuD71yHLso8Bt") vs
-// the drivers API's latestTransientDriverId — same id space, different field name.
+// list whose id isn't covered by any trip is unassigned right now. Compare
+// ids via entities[].drivers[].id (e.g. "amzn1.relay.d.v1.T-41b3QuD71yHLso8Bt")
+// vs the drivers API's latestTransientDriverId — same id space, different field name.
 async function fetchAllDrivers(tabId, cfg) {
   const url = cfg.relayBase.replace(/\/+$/, "") + "/api/hos/drivers";
   const r = await runInPage(tabId, url, {
@@ -1880,7 +1880,7 @@ function assignedDriverIds(entities) {
 
 // Resolve a city NAME to coordinates via the same cities/search endpoint the
 // harvest job already uses. Best-effort: returns null (never throws) so one
-// bad domicile name can't take down the whole free-drivers fetch.
+// bad domicile name can't take down the whole unassigned-drivers fetch.
 async function lookupCityCoords(tabId, cfg, cityName) {
   try {
     const data = await fetchCitiesInPage(tabId, cfg, cityName);
@@ -1897,8 +1897,8 @@ async function lookupCityCoords(tabId, cfg, cityName) {
 // exactly like a trip-based driver. Their only known location is their home
 // domicile (no trip drop-off), so we resolve each UNIQUE domicile city to
 // coordinates once (many drivers share a domicile) rather than per-driver.
-async function buildFreeDriverAvailability(tabId, cfg, allDrivers, assignedIds) {
-  const free = allDrivers.filter((d) => d && d.latestTransientDriverId && !assignedIds.has(d.latestTransientDriverId));
+async function buildUnassignedDriverAvailability(tabId, cfg, allDrivers, assignedIds) {
+  const unassigned = allDrivers.filter((d) => d && d.latestTransientDriverId && !assignedIds.has(d.latestTransientDriverId));
   const cityCache = new Map();
   async function coordsFor(cityName) {
     const key = cityName.toLowerCase().trim();
@@ -1909,7 +1909,7 @@ async function buildFreeDriverAvailability(tabId, cfg, allDrivers, assignedIds) 
   }
 
   const out = [];
-  for (const d of free) {
+  for (const d of unassigned) {
     const dom = d.domiciles && d.domiciles[0];
     const cityName = dom && dom.domicileName;
     if (!cityName) continue; // no domicile on file — nothing to search from
@@ -1934,7 +1934,7 @@ async function buildFreeDriverAvailability(tabId, cfg, allDrivers, assignedIds) 
       alreadyFree: true,
       nextTripStart: null,
       freeWindowHours: null,
-      unassigned: true, // lets the UI/scoring tell a free driver apart from a trip-based one
+      unassigned: true, // lets the UI/scoring tell an unassigned driver apart from a trip-based one
     });
   }
   return out;
@@ -1971,26 +1971,28 @@ async function refreshAvailabilityOnly() {
   console.log("[RLB availability] built " + availability.length + " trip-based driver(s):", availability);
   console.log("[RLB availability] JSON:", JSON.stringify(availability, null, 2));
 
-  // Fold in free (unassigned) drivers too — non-fatal if this leg fails, since
+  // Fold in unassigned drivers too — non-fatal if this leg fails, since
   // trip-based availability alone is still useful.
   let combined = availability;
   try {
     const allDrivers = await fetchAllDrivers(tab.id, cfg);
-    const free = await buildFreeDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
-    console.log("[RLB availability] " + free.length + " free (unassigned) driver(s):", free);
-    combined = availability.concat(free);
+    const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
+    console.log("[RLB availability] " + unassigned.length + " unassigned driver(s):", unassigned);
+    console.log("[RLB availability] unassigned JSON:", JSON.stringify(unassigned, null, 2));
+    combined = availability.concat(unassigned);
   } catch (e) {
-    await logError("background/refreshAvailabilityOnly/freeDrivers", e);
+    await logError("background/refreshAvailabilityOnly/unassignedDrivers", e);
   }
 
   await chrome.storage.local.set({ plannerAvailability: combined, plannerAvailabilityAt: Date.now() });
   return { ok: true, count: combined.length };
 }
 
-// Free-drivers-ONLY refresh, for the dedicated "Find loads for free drivers"
-// button — same computation as above, but plannerAvailability is REPLACED
-// with just the free drivers rather than merged with trip-based ones.
-async function refreshFreeDriversOnly() {
+// Unassigned-drivers-ONLY refresh, for the dedicated "Find loads for
+// unassigned drivers" button — same computation as above, but
+// plannerAvailability is REPLACED with just the unassigned drivers rather
+// than merged with trip-based ones.
+async function refreshUnassignedDriversOnly() {
   const cfg = await getConfig();
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
@@ -2014,10 +2016,11 @@ async function refreshFreeDriversOnly() {
   } catch (e) {
     return { ok: false, error: "Couldn't fetch the drivers list: " + ((e && e.message) || e) };
   }
-  const free = await buildFreeDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
-  console.log("[RLB availability] free-drivers-only run — " + free.length + " unassigned driver(s):", free);
-  await chrome.storage.local.set({ plannerAvailability: free, plannerAvailabilityAt: Date.now() });
-  return { ok: true, count: free.length };
+  const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
+  console.log("[RLB availability] unassigned-drivers-only run — " + unassigned.length + " driver(s):", unassigned);
+  console.log("[RLB availability] unassigned JSON:", JSON.stringify(unassigned, null, 2));
+  await chrome.storage.local.set({ plannerAvailability: unassigned, plannerAvailabilityAt: Date.now() });
+  return { ok: true, count: unassigned.length };
 }
 
 // Score page-provided loads against stored availability → load-centric list
@@ -2081,11 +2084,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     return true;
   }
-  if (msg.type === "refresh-free-drivers") {
-    refreshFreeDriversOnly()
+  if (msg.type === "refresh-unassigned-drivers") {
+    refreshUnassignedDriversOnly()
       .then(sendResponse)
       .catch((e) => {
-        logError("background/refresh-free-drivers", e);
+        logError("background/refresh-unassigned-drivers", e);
         sendResponse({ ok: false, error: String((e && e.message) || e) });
       });
     return true;
