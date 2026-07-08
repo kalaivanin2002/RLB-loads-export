@@ -69,6 +69,13 @@
       "#rlb-launch .bolt{font-size:16px;}",
       "#rlb-launch.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
       "@keyframes rlbpulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.45;transform:scale(1.28);}}",
+      // Second hero button: same shape, distinct colour — "free drivers only".
+      "#rlb-launch-free,#rlb-launch-free *{box-sizing:border-box;}",
+      "#rlb-launch-free{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:rgb(106,66,171);color:#fff;border:none;border-radius:4px;padding:12px 20px;font:500 14px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:none;transition:background-color .15s ease;}",
+      "#rlb-launch-free:hover{background:rgb(88,52,146);}",
+      "#rlb-launch-free:disabled{cursor:default;}",
+      "#rlb-launch-free .bolt{font-size:16px;}",
+      "#rlb-launch-free.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
       // Progress / result card.
       "#rlb-card,#rlb-card *{box-sizing:border-box;}",
       "#rlb-card{position:fixed;top:122px;right:22px;width:340px;max-width:92vw;z-index:2147483000;background:#fff;border:1px solid #e5e9f0;border-radius:14px;box-shadow:0 14px 44px rgba(15,23,42,.24);font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;overflow:hidden;display:none;}",
@@ -142,6 +149,23 @@
       }
     });
 
+    var btnFree = document.createElement("button");
+    btnFree.id = "rlb-launch-free";
+    btnFree.type = "button";
+    btnFree.innerHTML = '<span class="bolt">🅵</span><span class="lbl">Find loads for free drivers</span>';
+    document.body.appendChild(btnFree);
+    btnFree.addEventListener("click", function () {
+      try {
+        runFreeDriversAutopilot();
+      } catch (e) {
+        console.log("[RLB] launch (free) error:", e);
+        logError("launchFreeClick", e);
+        try { showCard(); cardError("Couldn't start", (e && e.message) ? e.message : String(e)); } catch (e2) {}
+        setLaunchBusy(false);
+        autofillBusy = false;
+      }
+    });
+
     var card = document.createElement("div");
     card.id = "rlb-card";
     card.innerHTML =
@@ -158,8 +182,10 @@
   // Anchor the floating launcher to the search panel's top-right so it reads as
   // part of the search area (we can't inject INTO the React panel without crashing
   // it, so we position a fixed button over it and keep it aligned on scroll/resize).
+  // The second ("free drivers") button sits immediately to its left, same row.
   function positionLauncher() {
     var b = document.getElementById("rlb-launch");
+    var bf = document.getElementById("rlb-launch-free");
     if (!b) return;
     var anchor = document.querySelector(".search__panel") ||
       document.getElementById("rlb-origin-city-filter");
@@ -170,18 +196,33 @@
     if (top < 8) top = r.top + 6;              // if no room above, sit at the top edge
     b.style.top = Math.max(8, top) + "px";
     b.style.right = Math.max(12, window.innerWidth - r.right) + "px";
+    if (bf) {
+      var br = b.getBoundingClientRect();
+      bf.style.top = b.style.top;
+      bf.style.right = Math.max(12, window.innerWidth - br.left + 10) + "px";
+    }
   }
 
   function showCard() { var c = document.getElementById("rlb-card"); if (c) c.classList.add("show"); }
   function hideCard() { var c = document.getElementById("rlb-card"); if (c) c.classList.remove("show"); }
   function setCard(html) { var el = document.getElementById("rlb-card-content"); if (el) el.innerHTML = html; }
+  // Both launcher buttons share one busy state — only one autopilot run
+  // (of either kind) can be in flight at a time (see autofillBusy).
   function setLaunchBusy(on) {
     var b = document.getElementById("rlb-launch");
-    if (!b) return;
-    b.classList.toggle("busy", !!on);
-    b.disabled = !!on;
-    var lbl = b.querySelector(".lbl");
-    if (lbl) lbl.textContent = on ? "Working…" : "Find my best loads";
+    var bf = document.getElementById("rlb-launch-free");
+    if (b) {
+      b.classList.toggle("busy", !!on);
+      b.disabled = !!on;
+      var lbl = b.querySelector(".lbl");
+      if (lbl) lbl.textContent = on ? "Working…" : "Find my best loads";
+    }
+    if (bf) {
+      bf.classList.toggle("busy", !!on);
+      bf.disabled = !!on;
+      var lblf = bf.querySelector(".lbl");
+      if (lblf) lblf.textContent = on ? "Working…" : "Find loads for free drivers";
+    }
   }
 
   // Live step list shown while the autopilot runs.
@@ -205,7 +246,11 @@
   function wireAdvanced() {
     var r = document.getElementById("rlb-t-refresh");
     var v = document.getElementById("rlb-t-view");
-    if (r) r.addEventListener("click", function () { runAutopilot(true); }); // force fresh fetch + re-run
+    if (r) r.addEventListener("click", function () {
+      // Force fresh fetch + re-run whichever flow produced this card.
+      if (lastMode === "free") runFreeDriversAutopilot();
+      else runAutopilot(true);
+    });
     if (v) v.addEventListener("click", showDrivers);
   }
   function setPanel(id, text) {
@@ -330,6 +375,7 @@
   var batches = [];   // [[{city,country}], [{city,country}], …] — one city per round
   var roundIdx = 0;
   var autofillBusy = false;
+  var lastMode = "all"; // "all" (runAutopilot) or "free" (runFreeDriversAutopilot) — which one Advanced → Refresh drivers should re-run
 
   var delay = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
 
@@ -726,6 +772,28 @@
       } catch (e) { lastDriverError = (e && e.message) || String(e); logError("refreshDriversAsync", e); resolve(0); }
     });
   }
+
+  // Same shape as refreshDriversAsync, but REPLACES plannerAvailability with
+  // only the free (unassigned) drivers instead of merging trip-based ones in
+  // (see background.js refreshFreeDriversOnly).
+  function refreshFreeDriversAsync() {
+    return new Promise(function (resolve) {
+      try {
+        chrome.runtime.sendMessage({ type: "refresh-free-drivers" }, function (res) {
+          if (chrome.runtime.lastError || !res || !res.ok) {
+            var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unknown failure";
+            logError("refreshFreeDriversAsync", msg);
+            lastDriverError = msg;
+            resolve(0);
+            return;
+          }
+          lastDriverError = null;
+          driverCount = res.count || 0; driverAt = Date.now();
+          resolve(driverCount);
+        });
+      } catch (e) { lastDriverError = (e && e.message) || String(e); logError("refreshFreeDriversAsync", e); resolve(0); }
+    });
+  }
   function getAvailability() {
     return new Promise(function (resolve) {
       try { chrome.storage.local.get(["plannerAvailability"], function (r) { resolve(r.plannerAvailability || []); }); }
@@ -781,6 +849,7 @@
   function runAutopilot(force) {
     if (autofillBusy) return;
     autofillBusy = true;
+    lastMode = "all";
     showCard();
     setLaunchBusy(true);
     var steps = autopilotSteps(false);
@@ -810,10 +879,54 @@
     });
   }
 
-  // Run every city's round back-to-back. showRoundResult overwrites the card
-  // with each round's own result as it completes; once the last one is done,
-  // append a summary noting every location that was searched (each has its
-  // own Load Board search tab by then).
+  // Same overall flow as runAutopilot, but sourced from ONLY the free
+  // (unassigned) drivers — see background.js refreshFreeDriversOnly. Always
+  // does a fresh fetch: "free right now" is a live/volatile fact that a stale
+  // cached mixed-availability list can't answer, so there's no cache to reuse.
+  function runFreeDriversAutopilot() {
+    if (autofillBusy) return;
+    autofillBusy = true;
+    lastMode = "free";
+    showCard();
+    setLaunchBusy(true);
+    var steps = autopilotSteps(false);
+    steps[0].label = "Fetching free (unassigned) drivers";
+    renderSteps(steps);
+
+    refreshFreeDriversAsync().then(function (count) {
+      steps[0].state = "done"; steps[1].state = "done"; renderSteps(steps);
+      if (!count) {
+        var reason = lastDriverError ? ("Reason: " + lastDriverError + ". ") : "";
+        cardError("No free drivers found.", reason + "Every driver may currently be on a trip, or none had a resolvable domicile city.");
+        return null;
+      }
+      driverCount = count; driverAt = Date.now();
+      return getAvailability().then(function (list) {
+        var cities = buildCityList(list);
+        if (!cities.length) { cardError("No free drivers to search from.", "None of the unassigned drivers had a resolvable domicile city."); return null; }
+
+        batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
+        roundIdx = 0;
+        return runAllRounds(steps, cities);
+      });
+    }).catch(function (e) {
+      logError("runFreeDriversAutopilot", e);
+      cardError("Something went wrong.", (e && e.message) ? e.message : String(e));
+    }).then(function () {
+      setLaunchBusy(false);
+      autofillBusy = false;
+    });
+  }
+
+  // Pace between rounds — firing search after search back-to-back with no gap
+  // reads as automated traffic and is what got the account flagged. A plain
+  // human pause between locations is cheap insurance against that.
+  var ROUND_DELAY_MS = 30000;
+
+  // Run every city's round, pacing ROUND_DELAY_MS between each one.
+  // showRoundResult overwrites the card with each round's own result as it
+  // completes; once the last one is done, append a summary noting every
+  // location that was searched (each has its own Load Board search tab by then).
   function runAllRounds(steps, cities) {
     return runAutoRound(steps).then(function () {
       if (roundIdx + 1 >= batches.length) {
@@ -822,8 +935,11 @@
       }
       roundIdx++;
       var nextSteps = autopilotSteps(true);
+      nextSteps[2].label = "Waiting " + Math.round(ROUND_DELAY_MS / 1000) + "s before the next search…";
       renderSteps(nextSteps);
-      return runAllRounds(nextSteps, cities);
+      return delay(ROUND_DELAY_MS).then(function () {
+        return runAllRounds(nextSteps, cities);
+      });
     });
   }
 
