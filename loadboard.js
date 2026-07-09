@@ -136,6 +136,7 @@
     btn.id = "rlb-launch";
     btn.type = "button";
     btn.innerHTML = '<span class="bolt">⚡</span><span class="lbl">Find my best loads</span>';
+    btn.title = "Find loads for ALL your drivers — those finishing trips plus idle (unassigned) drivers.";
     document.body.appendChild(btn);
     btn.addEventListener("click", function () {
       try {
@@ -152,7 +153,8 @@
     var btnUnassigned = document.createElement("button");
     btnUnassigned.id = "rlb-launch-unassigned";
     btnUnassigned.type = "button";
-    btnUnassigned.innerHTML = '<span class="bolt">U</span><span class="lbl">Find loads for unassigned drivers</span>';
+    btnUnassigned.innerHTML = '<span class="bolt">👤</span><span class="lbl">Find loads for unassigned drivers</span>';
+    btnUnassigned.title = "Find loads ONLY for drivers with no current trip (idle / unassigned).";
     document.body.appendChild(btnUnassigned);
     btnUnassigned.addEventListener("click", function () {
       try {
