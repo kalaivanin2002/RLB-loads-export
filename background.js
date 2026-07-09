@@ -2080,6 +2080,47 @@ async function refreshAvailabilityOnly() {
   return { ok: true, count: combined.length };
 }
 
+// Unassigned-drivers-ONLY refresh, for the dedicated "Find loads for
+// unassigned drivers" button. Stored under its OWN key
+// (plannerAvailabilityUnassigned / plannerAvailabilityUnassignedAt) — kept
+// separate from plannerAvailability (the trip-based+unassigned merged list
+// refreshAvailabilityOnly builds) so the two launcher buttons never clobber
+// each other's cached data, each can be reused/refreshed independently, and
+// scoring/highlighting driven by plannerAvailability is unaffected by this
+// flow running.
+async function refreshUnassignedDriversOnly() {
+  const cfg = await getConfig();
+  const tab = await findRelayTab();
+  if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
+  const csrf = await resolveCsrf(tab.id);
+  if (!csrf) return { ok: false, error: "No CSRF token — reload the Relay tab." };
+  let inTransit, upcoming;
+  try {
+    inTransit = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.inTransit);
+  } catch (e) {
+    return { ok: false, error: describeFetchEntitiesError(e, "in-transit") };
+  }
+  try {
+    upcoming = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.upcoming);
+  } catch (e) {
+    return { ok: false, error: describeFetchEntitiesError(e, "upcoming") };
+  }
+  // Trips here are only consulted to know WHO already has one (assignedDriverIds)
+  // — we don't need buildAvailability()'s trip-based records for this list.
+  const entities = inTransit.concat(upcoming);
+  let allDrivers;
+  try {
+    allDrivers = await fetchAllDrivers(tab.id, cfg);
+  } catch (e) {
+    return { ok: false, error: "Couldn't fetch the drivers list: " + ((e && e.message) || e) };
+  }
+  const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
+  console.log("[RLB availability] unassigned-only run — " + unassigned.length + " driver(s):", unassigned);
+  console.log("[RLB availability] unassigned JSON:", JSON.stringify(unassigned, null, 2));
+  await chrome.storage.local.set({ plannerAvailabilityUnassigned: unassigned, plannerAvailabilityUnassignedAt: Date.now() });
+  return { ok: true, count: unassigned.length };
+}
+
 // Score page-provided loads against stored availability → load-centric list
 // (each load with its suitable drivers). No network; pure computation.
 async function scoreLoadsForPage(loads) {
@@ -2142,11 +2183,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "refresh-unassigned-drivers") {
-    // Same canonical merge as "refresh-availability" — plannerAvailability is
-    // always the full (trip-based + unassigned) list; the caller filters it
-    // down to unassigned-only client-side. This keeps ONE shared source of
-    // truth so the two launcher buttons can never clobber each other's data.
-    refreshAvailabilityOnly()
+    refreshUnassignedDriversOnly()
       .then(sendResponse)
       .catch((e) => {
         logError("background/refresh-unassigned-drivers", e);

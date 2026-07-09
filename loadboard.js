@@ -829,13 +829,11 @@
     });
   }
 
-  // Same shape as refreshDriversAsync, and writes to the SAME canonical
-  // plannerAvailability (all drivers, merged) — background.js's
-  // "refresh-unassigned-drivers" handler is just refreshAvailabilityOnly()
-  // under a different name. We never want two buttons clobbering each
-  // other's cached data, so there is only ever one shared driver list; this
-  // flow's own "unassigned only" scope is applied client-side afterward (see
-  // runUnassignedDriversAutopilot, which filters by the `unassigned` flag).
+  // Same shape as refreshDriversAsync, but writes to its OWN storage key
+  // (plannerAvailabilityUnassigned, via background.js's
+  // refreshUnassignedDriversOnly) instead of the shared plannerAvailability
+  // — so this button and "Find my best loads" never clobber each other's
+  // cached data.
   function refreshUnassignedDriversAsync() {
     return new Promise(function (resolve) {
       try {
@@ -858,6 +856,12 @@
     return new Promise(function (resolve) {
       try { chrome.storage.local.get(["plannerAvailability"], function (r) { resolve(r.plannerAvailability || []); }); }
       catch (e) { logError("getAvailability", e); resolve([]); }
+    });
+  }
+  function getUnassignedAvailability() {
+    return new Promise(function (resolve) {
+      try { chrome.storage.local.get(["plannerAvailabilityUnassigned"], function (r) { resolve(r.plannerAvailabilityUnassigned || []); }); }
+      catch (e) { logError("getUnassignedAvailability", e); resolve([]); }
     });
   }
 
@@ -939,8 +943,9 @@
     });
   }
 
-  // Same overall flow as runAutopilot, but filtered down to ONLY the
-  // unassigned drivers after fetching. Always does a fresh fetch: "unassigned
+  // Same overall flow as runAutopilot, but sourced from the dedicated
+  // plannerAvailabilityUnassigned key (see getUnassignedAvailability) instead
+  // of the shared plannerAvailability. Always does a fresh fetch: "unassigned
   // right now" is a live/volatile fact that a stale cached list can't answer,
   // so there's no cache-reuse path here (unlike runAutopilot/ensureDrivers).
   function runUnassignedDriversAutopilot() {
@@ -957,17 +962,13 @@
       steps[0].state = "done"; steps[1].state = "done"; renderSteps(steps);
       if (!count) {
         var reason = lastDriverError ? ("Reason: " + lastDriverError + ". ") : "";
-        cardError("No drivers found.", reason + "Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers.");
+        cardError("No unassigned drivers found.", reason + "Every driver may currently be on a trip, or none had a resolvable domicile city.");
         return null;
       }
       driverCount = count; driverAt = Date.now();
-      // count above is the TOTAL (trip-based + unassigned) — plannerAvailability
-      // is the one shared canonical list either button can refresh. Narrow it
-      // down to this flow's own scope here, client-side.
-      return getAvailability().then(function (list) {
-        var unassignedList = list.filter(function (a) { return a && a.unassigned; });
-        var cities = buildCityList(unassignedList);
-        if (!cities.length) { cardError("No unassigned drivers to search from.", "Every driver may currently be on a trip, or none had a resolvable domicile city."); return null; }
+      return getUnassignedAvailability().then(function (list) {
+        var cities = buildCityList(list);
+        if (!cities.length) { cardError("No unassigned drivers to search from.", "None of the unassigned drivers had a resolvable domicile city."); return null; }
 
         batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
         roundIdx = 0;
