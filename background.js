@@ -1924,6 +1924,17 @@ async function fetchApprovedPlaces(cfg) {
   }).filter((p) => p.city || (p.latitude && p.longitude));
 }
 
+// A driver is only worth searching for if they're actually eligible to
+// work — active, identity-verified, and background-check cleared —
+// regardless of whether they currently have a trip.
+function isEligibleDriver(d) {
+  return (
+    d.status === "Active" &&
+    d.identityStatus === "VERIFIED" &&
+    !!d.backgroundCheck && d.backgroundCheck.status === "ELIGIBLE"
+  );
+}
+
 // Shape unassigned drivers into the same availability record shape
 // buildAvailability() produces, so they flow through buildCityList/scoring
 // exactly like a trip-based driver. Location source depends on cfg.useFleetyesPlaces:
@@ -1933,7 +1944,15 @@ async function fetchApprovedPlaces(cfg) {
 // Either way we resolve each UNIQUE city to coordinates once (cached), preferring
 // any real lat/lng the API already provides.
 async function buildUnassignedDriverAvailability(tabId, cfg, allDrivers, assignedIds) {
-  const unassigned = allDrivers.filter((d) => d && d.latestTransientDriverId && !assignedIds.has(d.latestTransientDriverId));
+  const noId = allDrivers.filter((d) => !(d && d.latestTransientDriverId)).length;
+  const candidates = allDrivers.filter((d) => d && d.latestTransientDriverId && !assignedIds.has(d.latestTransientDriverId));
+  const notEligible = candidates.filter((d) => !isEligibleDriver(d)).length;
+  const unassigned = candidates.filter(isEligibleDriver);
+  console.log(
+    "[RLB unassigned] " + allDrivers.length + " total driver(s), " + assignedIds.size + " assigned id(s) from trips, " +
+    noId + " driver(s) with no latestTransientDriverId, " + candidates.length + " candidate unassigned driver(s), " +
+    notEligible + " dropped (not Active/VERIFIED/ELIGIBLE), " + unassigned.length + " eligible unassigned driver(s)"
+  );
   if (!unassigned.length) return [];
 
   const cityCache = new Map();
@@ -1996,15 +2015,20 @@ async function buildUnassignedDriverAvailability(tabId, cfg, allDrivers, assigne
   }
 
   // ── OFF / fallback: each driver's Relay home domicile ──────────────────────────
+  let noDomicile = 0, unresolvedCity = 0;
   const out = [];
   for (const d of unassigned) {
     const dom = d.domiciles && d.domiciles[0];
     const cityName = dom && dom.domicileName;
-    if (!cityName) continue; // no domicile on file — nothing to search from
+    if (!cityName) { noDomicile++; continue; } // no domicile on file — nothing to search from
     const coords = await coordsFor(cityName);
-    if (!coords) continue; // couldn't resolve a location — skip rather than guess
+    if (!coords) { unresolvedCity++; continue; } // couldn't resolve a location — skip rather than guess
     out.push(record(d, coords, dom.domicileCode || null));
   }
+  console.log(
+    "[RLB unassigned] via Relay domicile: resolved " + out.length + " driver(s), dropped " + noDomicile +
+    " (no domicile) and " + unresolvedCity + " (couldn't resolve domicile city to coordinates)"
+  );
   return out;
 }
 
@@ -2054,41 +2078,6 @@ async function refreshAvailabilityOnly() {
 
   await chrome.storage.local.set({ plannerAvailability: combined, plannerAvailabilityAt: Date.now() });
   return { ok: true, count: combined.length };
-}
-
-// Unassigned-drivers-ONLY refresh, for the dedicated "Find loads for
-// unassigned drivers" button — same computation as above, but
-// plannerAvailability is REPLACED with just the unassigned drivers rather
-// than merged with trip-based ones.
-async function refreshUnassignedDriversOnly() {
-  const cfg = await getConfig();
-  const tab = await findRelayTab();
-  if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
-  const csrf = await resolveCsrf(tab.id);
-  if (!csrf) return { ok: false, error: "No CSRF token — reload the Relay tab." };
-  let inTransit, upcoming;
-  try {
-    inTransit = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.inTransit);
-  } catch (e) {
-    return { ok: false, error: describeFetchEntitiesError(e, "in-transit") };
-  }
-  try {
-    upcoming = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.upcoming);
-  } catch (e) {
-    return { ok: false, error: describeFetchEntitiesError(e, "upcoming") };
-  }
-  const entities = inTransit.concat(upcoming);
-  let allDrivers;
-  try {
-    allDrivers = await fetchAllDrivers(tab.id, cfg);
-  } catch (e) {
-    return { ok: false, error: "Couldn't fetch the drivers list: " + ((e && e.message) || e) };
-  }
-  const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
-  console.log("[RLB availability] unassigned-drivers-only run — " + unassigned.length + " driver(s):", unassigned);
-  console.log("[RLB availability] unassigned JSON:", JSON.stringify(unassigned, null, 2));
-  await chrome.storage.local.set({ plannerAvailability: unassigned, plannerAvailabilityAt: Date.now() });
-  return { ok: true, count: unassigned.length };
 }
 
 // Score page-provided loads against stored availability → load-centric list
@@ -2153,7 +2142,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "refresh-unassigned-drivers") {
-    refreshUnassignedDriversOnly()
+    // Same canonical merge as "refresh-availability" — plannerAvailability is
+    // always the full (trip-based + unassigned) list; the caller filters it
+    // down to unassigned-only client-side. This keeps ONE shared source of
+    // truth so the two launcher buttons can never clobber each other's data.
+    refreshAvailabilityOnly()
       .then(sendResponse)
       .catch((e) => {
         logError("background/refresh-unassigned-drivers", e);

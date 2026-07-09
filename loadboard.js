@@ -653,6 +653,58 @@
     return cities.filter(function (c) { return txt.indexOf(String(c).toLowerCase()) !== -1; }).length;
   }
 
+  // The origin box's already-selected cities render as one plain comma-joined
+  // string in a sibling <div id="rlb-origin-city-filter-value" mdn-select-
+  // value> — there is no separate per-city "×" to click. Clicking a city
+  // again in the open dropdown is how a real user deselects it (same as a
+  // checkbox toggle), so we open the listbox this input actually points to
+  // (via its own aria-controls — the id is React-generated and differs per
+  // render, so we read it live rather than hardcode it) and click off
+  // whatever it reports as currently selected.
+  function originBoxText() {
+    var input = originInput();
+    var box = (input && (input.closest("#rlb-origin-city-filter") || input.parentElement)) ||
+      document.getElementById("rlb-origin-city-filter");
+    return ((box && box.textContent) || "").replace(/\s+/g, " ").trim();
+  }
+  function originListbox(input) {
+    var id = input && input.getAttribute("aria-controls");
+    return id ? document.getElementById(id) : null;
+  }
+  function findSelectedOriginOption(listbox) {
+    if (!listbox) return null;
+    // Try the standard ARIA attribute first, then fall back to other common
+    // "this option is selected" patterns in case this widget doesn't use it.
+    return listbox.querySelector('[role="option"][aria-selected="true"]') ||
+      listbox.querySelector('[role="option"][aria-checked="true"]') ||
+      listbox.querySelector('[role="option"][class*="selected" i]');
+  }
+  function clearOriginSelections() {
+    var before = originBoxText();
+    if (!before) return Promise.resolve(); // already empty — nothing to clear
+    var input = originInput();
+    if (!input) return Promise.resolve();
+    input.focus();
+    realClick(input); // open the listbox (same trick used for a cold combobox elsewhere)
+    var chain = delay(350); // let the listbox actually open/populate
+    for (var pass = 0; pass < 6; pass++) {
+      chain = chain.then(function () {
+        var opt = findSelectedOriginOption(originListbox(input));
+        if (!opt) return null;
+        realClick(opt);
+        return delay(250);
+      });
+    }
+    return chain.then(function () {
+      var after = originBoxText();
+      if (after) {
+        console.log("[RLB fill] origin box still shows content after clearing — before: \"" + before + "\" after: \"" + after + "\"");
+      } else {
+        console.log("[RLB fill] cleared stale origin selection: \"" + before + "\"");
+      }
+    });
+  }
+
   // Reset the form and fill the origin cities. Resolves with
   // { clicked: <suggestions clicked>, verified: <cities visible in the box> }.
   function fillOrigins(cities) {
@@ -663,6 +715,8 @@
       return waitFor(originInput, 8000, 200).catch(function () {
         throw new Error("The search form didn't finish loading (origin box never appeared). Reload the page and try again.");
       });
+    }).then(function () {
+      return clearOriginSelections(); // strip anything carried over from the previous round's tab
     }).then(function () {
       var clicked = 0;
       var chain = Promise.resolve();
@@ -773,9 +827,13 @@
     });
   }
 
-  // Same shape as refreshDriversAsync, but REPLACES plannerAvailability with
-  // only the unassigned drivers instead of merging trip-based ones in (see
-  // background.js refreshUnassignedDriversOnly).
+  // Same shape as refreshDriversAsync, and writes to the SAME canonical
+  // plannerAvailability (all drivers, merged) — background.js's
+  // "refresh-unassigned-drivers" handler is just refreshAvailabilityOnly()
+  // under a different name. We never want two buttons clobbering each
+  // other's cached data, so there is only ever one shared driver list; this
+  // flow's own "unassigned only" scope is applied client-side afterward (see
+  // runUnassignedDriversAutopilot, which filters by the `unassigned` flag).
   function refreshUnassignedDriversAsync() {
     return new Promise(function (resolve) {
       try {
@@ -879,10 +937,10 @@
     });
   }
 
-  // Same overall flow as runAutopilot, but sourced from ONLY the unassigned
-  // drivers — see background.js refreshUnassignedDriversOnly. Always does a
-  // fresh fetch: "unassigned right now" is a live/volatile fact that a stale
-  // cached mixed-availability list can't answer, so there's no cache to reuse.
+  // Same overall flow as runAutopilot, but filtered down to ONLY the
+  // unassigned drivers after fetching. Always does a fresh fetch: "unassigned
+  // right now" is a live/volatile fact that a stale cached list can't answer,
+  // so there's no cache-reuse path here (unlike runAutopilot/ensureDrivers).
   function runUnassignedDriversAutopilot() {
     if (autofillBusy) return;
     autofillBusy = true;
@@ -897,13 +955,17 @@
       steps[0].state = "done"; steps[1].state = "done"; renderSteps(steps);
       if (!count) {
         var reason = lastDriverError ? ("Reason: " + lastDriverError + ". ") : "";
-        cardError("No unassigned drivers found.", reason + "Every driver may currently be on a trip, or none had a resolvable domicile city.");
+        cardError("No drivers found.", reason + "Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers.");
         return null;
       }
       driverCount = count; driverAt = Date.now();
+      // count above is the TOTAL (trip-based + unassigned) — plannerAvailability
+      // is the one shared canonical list either button can refresh. Narrow it
+      // down to this flow's own scope here, client-side.
       return getAvailability().then(function (list) {
-        var cities = buildCityList(list);
-        if (!cities.length) { cardError("No unassigned drivers to search from.", "None of the unassigned drivers had a resolvable domicile city."); return null; }
+        var unassignedList = list.filter(function (a) { return a && a.unassigned; });
+        var cities = buildCityList(unassignedList);
+        if (!cities.length) { cardError("No unassigned drivers to search from.", "Every driver may currently be on a trip, or none had a resolvable domicile city."); return null; }
 
         batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
         roundIdx = 0;
