@@ -26,6 +26,8 @@
     ontrackUrl: "https://ontrack-api.agilecyber.com/api/v1/rlb-locations",
     ingestUrl: "",
     token: "",
+    carrierCode: "",
+    useFleetyesPlaces: false,
     letters: "abcdefghijklmnopqrstuvwxyz",
     prefix: ", ",
     delayMs: 500,
@@ -58,6 +60,8 @@
     ontrackUrl: $("ontrackUrl"),
     ingestUrl: $("ingestUrl"),
     token: $("token"),
+    carrierCode: $("carrierCode"),
+    useFleetyesPlaces: $("useFleetyesPlaces"),
     relayBase: $("relayBase"),
     prefix: $("prefix"),
     letters: $("letters"),
@@ -114,6 +118,8 @@
       els.ontrackUrl.value = cfg.ontrackUrl;
       els.ingestUrl.value = cfg.ingestUrl;
       els.token.value = cfg.token;
+      els.carrierCode.value = cfg.carrierCode || "";
+      els.useFleetyesPlaces.checked = cfg.useFleetyesPlaces === true;
       els.relayBase.value = cfg.relayBase;
       els.prefix.value = cfg.prefix;
       els.letters.value = cfg.letters;
@@ -164,6 +170,8 @@
       ontrackUrl: els.ontrackUrl.value.trim() || DEFAULTS.ontrackUrl,
       ingestUrl: els.ingestUrl.value.trim() || DEFAULTS.ingestUrl,
       token: els.token.value.trim(),
+      carrierCode: els.carrierCode.value.trim(),
+      useFleetyesPlaces: els.useFleetyesPlaces.checked,
       relayBase: els.relayBase.value.trim() || DEFAULTS.relayBase,
       prefix: els.prefix.value,
       letters: els.letters.value.trim() || DEFAULTS.letters,

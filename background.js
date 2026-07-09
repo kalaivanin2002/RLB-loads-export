@@ -21,6 +21,8 @@ const DEFAULTS = {
   ontrackUrl: "https://ontrack-api.agilecyber.com/api/v1/rlb-locations",
   ingestUrl: "",
   token: "",
+  carrierCode: "", // e.g. "AMRTL" — used for the FleetYes approved-places lookup
+  useFleetyesPlaces: false, // ON → unassigned drivers searched from FleetYes approved places; OFF → Relay domicile
   letters: "abcdefghijklmnopqrstuvwxyz",
   prefix: ", ",
   delayMs: 500,
@@ -1892,22 +1894,108 @@ async function lookupCityCoords(tabId, cfg, cityName) {
   }
 }
 
+// Derive the approved-places endpoint from the configured OnTrack base URL
+// (…/api/v1/rlb-locations → …/api/v1/approved-places), so there's no extra URL
+// setting to keep in sync.
+function approvedPlacesUrl(cfg) {
+  const base = (cfg.ontrackUrl || "").replace(/\/+$/, "").replace(/\/[^/]*$/, "");
+  return base + "/approved-places";
+}
+
+// Fetch the carrier's approved places from FleetYes/OnTrack. Returns a slim list
+// of { name, city, latitude, longitude }. lat/lng are often 0 (not yet populated)
+// — callers must resolve the city to coordinates in that case.
+async function fetchApprovedPlaces(cfg) {
+  if (!cfg.carrierCode) throw new Error("No carrier_code set (Settings).");
+  const url = approvedPlacesUrl(cfg) + "?carrier_code=" + encodeURIComponent(cfg.carrierCode);
+  const res = await fetch(url, { headers: { Accept: "application/json", Authorization: "Bearer " + cfg.token } });
+  const text = await res.text();
+  if (!res.ok) {
+    const err = new Error("approved-places HTTP " + res.status + ": " + text.slice(0, 200));
+    await logError("background/fetchApprovedPlaces", err, { url: url, status: res.status });
+    throw err;
+  }
+  let data;
+  try { data = JSON.parse(text); } catch (e) { throw new Error("approved-places response was not JSON"); }
+  const rows = Array.isArray(data && data.data) ? data.data : [];
+  return rows.map((row) => {
+    const p = (row && row.place) || {};
+    return { name: p.name || null, city: p.city || null, latitude: num(p.latitude), longitude: num(p.longitude) };
+  }).filter((p) => p.city || (p.latitude && p.longitude));
+}
+
 // Shape unassigned drivers into the same availability record shape
 // buildAvailability() produces, so they flow through buildCityList/scoring
-// exactly like a trip-based driver. Their only known location is their home
-// domicile (no trip drop-off), so we resolve each UNIQUE domicile city to
-// coordinates once (many drivers share a domicile) rather than per-driver.
+// exactly like a trip-based driver. Location source depends on cfg.useFleetyesPlaces:
+//   ON  → the carrier's FleetYes approved places (pool: every unassigned driver is
+//         searched from every approved-place city).
+//   OFF → each driver's Relay home domicile (the original behaviour).
+// Either way we resolve each UNIQUE city to coordinates once (cached), preferring
+// any real lat/lng the API already provides.
 async function buildUnassignedDriverAvailability(tabId, cfg, allDrivers, assignedIds) {
   const unassigned = allDrivers.filter((d) => d && d.latestTransientDriverId && !assignedIds.has(d.latestTransientDriverId));
+  if (!unassigned.length) return [];
+
   const cityCache = new Map();
   async function coordsFor(cityName) {
-    const key = cityName.toLowerCase().trim();
+    const key = String(cityName).toLowerCase().trim();
     if (cityCache.has(key)) return cityCache.get(key);
     const coords = await lookupCityCoords(tabId, cfg, cityName);
     cityCache.set(key, coords);
     return coords;
   }
 
+  const driverRec = (d) => ({
+    id: d.latestTransientDriverId,
+    staticDriverId: d.integerDriverId || null,
+    name: ((d.firstName || "") + " " + (d.lastName || "")).trim() || "Unknown",
+    phoneNumber: d.phoneNumber || null,
+    email: d.emailId || null,
+  });
+  const record = (d, coords, domicileCode) => ({
+    driver: driverRec(d),
+    lastTripId: null,
+    lastTripState: null,
+    lastTripEndTime: null,
+    freeLocation: { city: coords.name, country: coords.country || null, latitude: coords.latitude, longitude: coords.longitude },
+    domicile: domicileCode || null,
+    equipment: null,
+    freeAt: null,
+    freeAtEffective: new Date().toISOString(),
+    alreadyFree: true,
+    nextTripStart: null,
+    freeWindowHours: null,
+    unassigned: true, // lets the UI/scoring tell an unassigned driver apart from a trip-based one
+  });
+
+  // ── ON: FleetYes approved places (shared pool for all unassigned drivers) ──────
+  if (cfg.useFleetyesPlaces) {
+    try {
+      const approved = await fetchApprovedPlaces(cfg);
+      const placeCoords = [];
+      for (const p of approved) {
+        let coords = null;
+        if (p.latitude && p.longitude) coords = { name: p.city || p.name, country: null, latitude: p.latitude, longitude: p.longitude };
+        else if (p.city) coords = await coordsFor(p.city);
+        if (coords) placeCoords.push(coords);
+      }
+      if (placeCoords.length) {
+        const out = [];
+        for (const d of unassigned) {
+          for (const loc of placeCoords) out.push(record(d, loc, null)); // each driver × each place
+        }
+        console.log("[RLB availability] unassigned via FleetYes places: " + unassigned.length + " driver(s) × " + placeCoords.length + " place(s)");
+        return out;
+      }
+      // approved-places empty → fall through to the domicile source below.
+      console.log("[RLB availability] FleetYes approved-places empty — falling back to Relay domicile.");
+    } catch (e) {
+      await logError("background/buildUnassignedDriverAvailability/fleetyes", e);
+      // fall through to domicile
+    }
+  }
+
+  // ── OFF / fallback: each driver's Relay home domicile ──────────────────────────
   const out = [];
   for (const d of unassigned) {
     const dom = d.domiciles && d.domiciles[0];
@@ -1915,27 +2003,7 @@ async function buildUnassignedDriverAvailability(tabId, cfg, allDrivers, assigne
     if (!cityName) continue; // no domicile on file — nothing to search from
     const coords = await coordsFor(cityName);
     if (!coords) continue; // couldn't resolve a location — skip rather than guess
-    out.push({
-      driver: {
-        id: d.latestTransientDriverId,
-        staticDriverId: d.integerDriverId || null,
-        name: ((d.firstName || "") + " " + (d.lastName || "")).trim() || "Unknown",
-        phoneNumber: d.phoneNumber || null,
-        email: d.emailId || null,
-      },
-      lastTripId: null,
-      lastTripState: null,
-      lastTripEndTime: null,
-      freeLocation: { city: coords.name, country: coords.country, latitude: coords.latitude, longitude: coords.longitude },
-      domicile: dom.domicileCode || null,
-      equipment: null,
-      freeAt: null,
-      freeAtEffective: new Date().toISOString(),
-      alreadyFree: true,
-      nextTripStart: null,
-      freeWindowHours: null,
-      unassigned: true, // lets the UI/scoring tell an unassigned driver apart from a trip-based one
-    });
+    out.push(record(d, coords, dom.domicileCode || null));
   }
   return out;
 }
