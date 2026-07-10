@@ -60,6 +60,7 @@
       "#rlb-tip .h{font-weight:700;margin-bottom:6px;color:#fff;}",
       "#rlb-tip table{width:100%;border-collapse:collapse;}",
       "#rlb-tip td{padding:2px 6px 2px 0;white-space:nowrap;}",
+      "#rlb-tip th{padding:2px 6px 4px 0;white-space:nowrap;text-align:left;color:#94a3b8;font-weight:600;font-size:11px;border-bottom:1px solid #334155;}",
       "#rlb-tip tr.b td{color:#4ade80;font-weight:600;}",
       // Hero launcher button (top-right, near the search).
       "#rlb-launch,#rlb-launch *{box-sizing:border-box;}",
@@ -1168,7 +1169,7 @@
     lastLoads = loads;
     setPanel("rlb-seen", String(loads.length));
     try {
-      chrome.runtime.sendMessage({ type: "score-loads", loads: loads }, function (res) {
+      chrome.runtime.sendMessage({ type: "score-loads", loads: loads, mode: lastMode }, function (res) {
         if (chrome.runtime.lastError || !res || !res.ok) {
           logError("scoreAndPaint", (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "score-loads failed");
           resolveScores(null); // unblock the autopilot even on failure
@@ -1285,15 +1286,20 @@
       var name = d.driver && d.driver.name ? d.driver.name : "(unknown)";
       return (
         '<tr class="' + (i === 0 ? "b" : "") + '"><td>' + esc(name) + "</td><td>" +
-        n1(d.deadheadMiles) + "mi dh</td><td>" + (d.returnMiles == null ? "—" : n1(d.returnMiles) + "mi ret") + "</td><td>" +
-        n1(d.pickupGapHours) + "h</td><td>" + n1(d.fitScore != null ? d.fitScore * 100 : null) + "</td></tr>"
+        n1(d.deadheadMiles) + "</td><td>" + (d.returnMiles == null ? "—" : n1(d.returnMiles)) + "</td><td>" +
+        n1(d.pickupGapHours) + "</td><td>" + n1(d.fitScore != null ? d.fitScore * 100 : null) + "</td></tr>"
       );
     }).join("");
     var pc = info.pickup && info.pickup.city, dc = info.dropoff && info.dropoff.city;
+    // Column headers so the numbers read clearly: empty miles to pickup, miles the
+    // delivery leaves them from start, hours until pickup, and the 0–100 fit score.
+    var head =
+      "<thead><tr><th>Driver</th><th>Deadhead (mi)</th><th>Return (mi)</th>" +
+      "<th>Pickup in (h)</th><th>Fit</th></tr></thead>";
     t.innerHTML =
       '<div class="h">£' + (info.payout != null ? Math.round(info.payout) : "—") + " · " + esc(pc) + " → " + esc(dc) +
       " · " + esc(info.workType === "ROUND_TRIP" ? "Round trip" : info.workType === "ONE_WAY" ? "One-way" : info.workType || "") + "</div>" +
-      "<table>" + rows + "</table>";
+      "<table>" + head + "<tbody>" + rows + "</tbody></table>";
     t.style.display = "block";
     positionTip(e);
   }

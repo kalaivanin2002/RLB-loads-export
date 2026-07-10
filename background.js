@@ -2123,11 +2123,22 @@ async function refreshUnassignedDriversOnly() {
 
 // Score page-provided loads against stored availability → load-centric list
 // (each load with its suitable drivers). No network; pure computation.
-async function scoreLoadsForPage(loads) {
+async function scoreLoadsForPage(loads, mode) {
   const cfg = await getConfig();
-  const stored = await chrome.storage.local.get(["plannerAvailability", "plannerAvailabilityAt"]);
-  const availability = stored.plannerAvailability || [];
-  if (!availability.length) return { ok: true, drivers: 0, loads: [], availabilityAt: stored.plannerAvailabilityAt || null };
+  // "unassigned" mode (the U launcher) must score against the unassigned-only
+  // list, not the merged assigned+unassigned plannerAvailability the ⚡ button
+  // writes — otherwise assigned drivers leak into the highlight/tooltip.
+  const stored = await chrome.storage.local.get([
+    "plannerAvailability", "plannerAvailabilityAt",
+    "plannerAvailabilityUnassigned", "plannerAvailabilityUnassignedAt",
+  ]);
+  // In "unassigned" mode we commit to the unassigned-only list even when it's
+  // empty — no fallback to the merged list, so assigned drivers can never leak
+  // in. An empty list simply yields 0 matches ("no unassigned drivers").
+  const useUnassigned = mode === "unassigned";
+  const availability = useUnassigned ? (stored.plannerAvailabilityUnassigned || []) : (stored.plannerAvailability || []);
+  const availabilityAt = useUnassigned ? (stored.plannerAvailabilityUnassignedAt || null) : (stored.plannerAvailabilityAt || null);
+  if (!availability.length) return { ok: true, drivers: 0, loads: [], availabilityAt: availabilityAt };
   const response = { workOpportunities: Array.isArray(loads) ? loads : [] };
   const perDriver = [];
   // Aggregate why loads get dropped, so the panel/console can explain "0 matches".
@@ -2159,7 +2170,7 @@ async function scoreLoadsForPage(loads) {
     ));
   }
   const topLoads = buildTopLoads(perDriver, 0); // 0 = keep every matched load, not just top N
-  return { ok: true, drivers: availability.length, loads: topLoads, diag: diag, availabilityAt: stored.plannerAvailabilityAt || null };
+  return { ok: true, drivers: availability.length, loads: topLoads, diag: diag, availabilityAt: availabilityAt };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -2174,7 +2185,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // keep the channel open for the async response
   }
   if (msg.type === "score-loads") {
-    scoreLoadsForPage(msg.loads || [])
+    scoreLoadsForPage(msg.loads || [], msg.mode)
       .then(sendResponse)
       .catch((e) => {
         logError("background/score-loads", e);
