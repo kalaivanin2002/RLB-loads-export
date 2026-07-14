@@ -14,6 +14,7 @@
   var lastLoads = null; // last slim loads seen from the page (for re-scoring after a driver refresh)
   var driverCount = 0;
   var driverAt = null;
+  var onlyMyDrivers = false; // "only my driver locations" filter — hide unmatched load cards
   var lastDriverError = null; // set by refreshDriversAsync on failure, shown in the "No drivers found" card
   var tip = null;
   var observer = null;
@@ -77,6 +78,13 @@
       "#rlb-launch-unassigned:disabled{cursor:default;}",
       "#rlb-launch-unassigned .bolt{font-size:16px;}",
       "#rlb-launch-unassigned.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
+      // "Only my driver locations" filter chip — sits under the launcher buttons.
+      "#rlb-only-mine,#rlb-only-mine *{box-sizing:border-box;}",
+      "#rlb-only-mine{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);cursor:pointer;user-select:none;}",
+      "#rlb-only-mine input{width:15px;height:15px;margin:0;cursor:pointer;accent-color:rgb(0,104,141);}",
+      // Hide non-matching load cards when the filter is on (data-attr = React-safe,
+      // same approach as the highlight outline — we never touch Relay's child nodes).
+      "[data-rlb-hidden]{display:none!important;}",
       // Progress / result card.
       "#rlb-card,#rlb-card *{box-sizing:border-box;}",
       "#rlb-card{position:fixed;top:122px;right:22px;width:340px;max-width:92vw;z-index:2147483000;background:#fff;border:1px solid #e5e9f0;border-radius:14px;box-shadow:0 14px 44px rgba(15,23,42,.24);font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;overflow:hidden;display:none;}",
@@ -169,6 +177,23 @@
       }
     });
 
+    // "Only my driver locations" filter — when checked, hide every load card that
+    // isn't matched to one of your drivers. Reflects the persisted `onlyMyDrivers`
+    // JS state (which survives SPA navigation) so it stays in sync if the panel is
+    // rebuilt after a route change.
+    var only = document.createElement("label");
+    only.id = "rlb-only-mine";
+    only.title = "Hide loads that don't match any of your drivers.";
+    only.innerHTML = '<input id="rlb-only-mine-cb" type="checkbox" /><span>Only my driver locations</span>';
+    document.body.appendChild(only);
+    var onlyCb = only.querySelector("#rlb-only-mine-cb");
+    onlyCb.checked = onlyMyDrivers;
+    onlyCb.addEventListener("change", function () {
+      onlyMyDrivers = onlyCb.checked;
+      try { chrome.storage.local.set({ onlyMyDrivers: onlyMyDrivers }); } catch (e) { /* context invalidated */ }
+      schedulePaint();
+    });
+
     var card = document.createElement("div");
     card.id = "rlb-card";
     card.innerHTML =
@@ -203,6 +228,14 @@
       var br = b.getBoundingClientRect();
       bf.style.top = b.style.top;
       bf.style.right = Math.max(12, window.innerWidth - br.left + 10) + "px";
+    }
+    // The filter chip sits on the same row as the launcher buttons, to the left of
+    // the "unassigned" button — keeps the result card area (below) clear.
+    var only = document.getElementById("rlb-only-mine");
+    if (only) {
+      only.style.top = b.style.top;
+      var leftAnchor = (bf || b).getBoundingClientRect();
+      only.style.right = Math.max(12, window.innerWidth - leftAnchor.left + 10) + "px";
     }
   }
 
@@ -263,6 +296,19 @@
   function updatePanel() {
     setPanel("rlb-drv", String(driverCount || 0));
     if (!driverCount) setPanel("rlb-msg", "Click Refresh drivers to load availability.");
+  }
+
+  // Restore the persisted "only my driver locations" filter state, sync the
+  // checkbox, and repaint so the filter takes effect on the current board.
+  function loadOnlyMinePref() {
+    try {
+      chrome.storage.local.get(["onlyMyDrivers"], function (r) {
+        onlyMyDrivers = !!r.onlyMyDrivers;
+        var cb = document.getElementById("rlb-only-mine-cb");
+        if (cb) cb.checked = onlyMyDrivers;
+        schedulePaint();
+      });
+    } catch (e) { /* context invalidated */ }
   }
 
   // ── driver availability ───────────────────────────────────────────────────────
@@ -1220,6 +1266,9 @@
       m[j].removeAttribute("data-rlb-badge");
       m[j].__rlbInfo = null;
     }
+    // Reveal anything the "only my drivers" filter hid — doPaint re-hides as needed.
+    var h = document.querySelectorAll("[data-rlb-hidden]");
+    for (var k = 0; k < h.length; k++) h[k].removeAttribute("data-rlb-hidden");
   }
   function schedulePaint() {
     if (scheduled) return;
@@ -1238,12 +1287,20 @@
     var rows = loadRows();
     setPanel("rlb-rows", String(rows.length));
     clearPaint();
+    // Only hide non-matching cards once we actually have scored loads — otherwise
+    // (e.g. before the first search is scored) the whole board would blank out.
+    var haveScores = false;
+    for (var k in latest) { if (Object.prototype.hasOwnProperty.call(latest, k)) { haveScores = true; break; } }
+    var hideOthers = onlyMyDrivers && haveScores;
     var matched = 0;
     for (var i = 0; i < rows.length; i++) {
       var el = rows[i].el;
       var info = latest[rows[i].id];
-      if (!info) continue;
       var target = (el.closest && el.closest(".load-card")) || el;
+      if (!info) {
+        if (hideOthers) target.setAttribute("data-rlb-hidden", "1");
+        continue;
+      }
       matched++;
       target.setAttribute("data-rlb-match", info.bestScore >= 0.85 ? "strong" : "weak");
       target.setAttribute("data-rlb-badge", "▲ " + info.driverCount + (info.driverCount === 1 ? " driver" : " drivers"));
@@ -1319,6 +1376,7 @@
   function boot() {
     injectStyles();
     ensurePanel();
+    loadOnlyMinePref();
     loadDriverCount();
     replayBufferedSearch();
     observer = new MutationObserver(schedulePaint);
