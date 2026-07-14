@@ -78,10 +78,16 @@
       "#rlb-launch-unassigned:disabled{cursor:default;}",
       "#rlb-launch-unassigned .bolt{font-size:16px;}",
       "#rlb-launch-unassigned.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
-      // "Only my driver locations" filter chip — sits under the launcher buttons.
+      // "Only my driver locations" filter chip — a slider-style toggle + label.
       "#rlb-only-mine,#rlb-only-mine *{box-sizing:border-box;}",
-      "#rlb-only-mine{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);cursor:pointer;user-select:none;}",
-      "#rlb-only-mine input{width:15px;height:15px;margin:0;cursor:pointer;accent-color:rgb(0,104,141);}",
+      "#rlb-only-mine{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);cursor:pointer;user-select:none;}",
+      // Toggle switch: the real checkbox is transparent on top; the slider draws the UI.
+      "#rlb-only-mine .rlb-switch{position:relative;display:inline-block;width:34px;height:18px;flex:none;}",
+      "#rlb-only-mine .rlb-switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;}",
+      "#rlb-only-mine .rlb-slider{position:absolute;inset:0;background:#cbd5e1;border-radius:999px;transition:background .15s ease;}",
+      "#rlb-only-mine .rlb-slider::before{content:\"\";position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s ease;}",
+      "#rlb-only-mine .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
+      "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
       // Hide non-matching load cards when the filter is on (data-attr = React-safe,
       // same approach as the highlight outline — we never touch Relay's child nodes).
       "[data-rlb-hidden]{display:none!important;}",
@@ -189,7 +195,7 @@
     var only = document.createElement("label");
     only.id = "rlb-only-mine";
     only.title = "Hide loads that don't match any of your drivers.";
-    only.innerHTML = '<input id="rlb-only-mine-cb" type="checkbox" /><span>Only my driver locations</span>';
+    only.innerHTML = '<span class="rlb-switch"><input id="rlb-only-mine-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Only my driver locations</span>';
     document.body.appendChild(only);
     var onlyCb = only.querySelector("#rlb-only-mine-cb");
     onlyCb.checked = onlyMyDrivers;
@@ -234,14 +240,36 @@
       bf.style.top = b.style.top;
       bf.style.right = Math.max(12, window.innerWidth - br.left + 10) + "px";
     }
-    // The filter chip sits as its own row just BELOW the search panel's fields
-    // (Origin / Radius / Equipment), left-aligned under Origin. We can't inject into
-    // the React panel, so we overlay a fixed element aligned to the panel's bounds.
+    // The filter chip sits INLINE on the search panel's fields row, in the empty gap
+    // to the right of the "Search loads" button (before "Saved searches"), vertically
+    // centred on the inputs. We can't inject into the React panel, so we overlay a
+    // fixed element aligned to the fields' boxes. Fall back to below-Origin, then to
+    // the panel's bottom-left, if those anchors aren't found.
     var only = document.getElementById("rlb-only-mine");
     if (only) {
-      only.style.top = (r.bottom + 8) + "px";
       only.style.right = "auto";
-      only.style.left = Math.max(8, r.left) + "px";
+      var originEl = document.getElementById("rlb-origin-city-filter");
+      var oref = originEl && originEl.getBoundingClientRect();
+      // "Search loads" has no stable id — find it by its label text within the panel.
+      var searchBtn = null, panelEl = anchor.closest ? (anchor.closest(".search__panel") || anchor) : anchor;
+      var btns = (panelEl || document).querySelectorAll("button");
+      for (var bi = 0; bi < btns.length; bi++) {
+        if ((btns[bi].textContent || "").trim().toLowerCase() === "search loads") { searchBtn = btns[bi]; break; }
+      }
+      var sref = searchBtn && searchBtn.getBoundingClientRect();
+      var eqEl = document.getElementById("equipment-trailer-filter");
+      var eref = eqEl && eqEl.getBoundingClientRect();
+      var anchorRight = (sref && sref.width) ? sref.right : ((eref && eref.width) ? eref.right : null);
+      if (anchorRight != null && oref && oref.width) {
+        only.style.left = (anchorRight + 16) + "px";
+        only.style.top = (oref.top + (oref.height - only.offsetHeight) / 2) + "px";
+      } else if (oref && oref.width) {
+        only.style.left = Math.max(8, oref.left) + "px";
+        only.style.top = (oref.bottom + 8) + "px";
+      } else {
+        only.style.left = Math.max(8, r.left + 12) + "px";
+        only.style.top = Math.max(8, r.bottom - only.offsetHeight - 12) + "px";
+      }
     }
   }
 
