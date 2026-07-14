@@ -88,6 +88,11 @@
       // Hide non-matching load cards when the filter is on (data-attr = React-safe,
       // same approach as the highlight outline — we never touch Relay's child nodes).
       "[data-rlb-hidden]{display:none!important;}",
+      // When the filter is on, the only visible cards are matches — so the outline,
+      // tint and badge are redundant. Suppress them (data-rlb-match stays on the node
+      // for counting / step-through; only its visual styling is neutralised here).
+      "html[data-rlb-filter] [data-rlb-match]{outline:none!important;background:transparent!important;}",
+      "html[data-rlb-filter] [data-rlb-badge]::after{display:none!important;}",
       // "Human refresh" min/max seconds — same chip styling as the filter above.
       "#rlb-human-refresh,#rlb-human-refresh *{box-sizing:border-box;}",
       "#rlb-human-refresh{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;white-space:nowrap;}",
@@ -275,13 +280,14 @@
       bf.style.top = b.style.top;
       bf.style.right = Math.max(12, window.innerWidth - br.left + 10) + "px";
     }
-    // The filter chip sits on the same row as the launcher buttons, to the left of
-    // the "unassigned" button — keeps the result card area (below) clear.
+    // The filter chip sits as its own row just BELOW the search panel's fields
+    // (Origin / Radius / Equipment), left-aligned under Origin. We can't inject into
+    // the React panel, so we overlay a fixed element aligned to the panel's bounds.
     var only = document.getElementById("rlb-only-mine");
     if (only) {
-      only.style.top = b.style.top;
-      var leftAnchor = (bf || b).getBoundingClientRect();
-      only.style.right = Math.max(12, window.innerWidth - leftAnchor.left + 10) + "px";
+      only.style.top = (r.bottom + 8) + "px";
+      only.style.right = "auto";
+      only.style.left = Math.max(8, r.left) + "px";
     }
     // The human-refresh chip sits further left still, same row.
     var hr = document.getElementById("rlb-human-refresh");
@@ -1387,6 +1393,10 @@
     var haveScores = false;
     for (var k in latest) { if (Object.prototype.hasOwnProperty.call(latest, k)) { haveScores = true; break; } }
     var hideOthers = onlyMyDrivers && haveScores;
+    // Filter on → drop the highlight styling (outline/tint/badge) via CSS; see the
+    // "html[data-rlb-filter]" rules. The match attributes themselves stay for counting.
+    if (onlyMyDrivers) document.documentElement.setAttribute("data-rlb-filter", "1");
+    else document.documentElement.removeAttribute("data-rlb-filter");
     var matched = 0;
     for (var i = 0; i < rows.length; i++) {
       var el = rows[i].el;
