@@ -9,43 +9,28 @@
   <div class="container">
     <div class="app-head">
       <h1 class="title">RLB</h1>
-      <span class="settings-tabs">
-        <button id="toggleAdmin" class="link-btn" type="button">Settings</button>
-      </span>
     </div>
 
-    <!-- Admin settings: operational / business rules a dispatcher tunes. -->
+    <!-- Planning rules: the scoring / feasibility knobs the on-page ⚡ workflow uses. -->
+    <button id="toggleAdmin" class="disclosure" type="button">Planning rules ▾</button>
     <div id="adminSettings" class="settings hidden">
-      <div class="settings-title">Planning rules</div>
       <div class="field-row">
-        <label class="field">
-          <span>Search radius (mi)</span>
-          <input id="searchRadius" type="number" min="0" step="1" />
-          <small class="field-hint">How far Relay looks around each drop-off. Set wide — it over-fetches so the next field can trim precisely.</small>
-        </label>
         <label class="field">
           <span>Max pickup distance (mi)</span>
           <input id="nearbyRadius" type="number" min="0" step="1" />
-          <small class="field-hint">Keep only loads whose pickup is within this straight-line distance of the drop-off (the empty miles to start).</small>
+          <small class="field-hint">Keep only loads whose pickup is within this straight-line distance of the driver (the empty miles to start).</small>
         </label>
-      </div>
-      <div class="field-row">
         <label class="field">
           <span>Min load length (mi)</span>
           <input id="minTripMiles" type="number" min="0" step="1" />
           <small class="field-hint">Drop loads shorter than this, so tiny shuttles don't beat real runs. 0 = keep all.</small>
-        </label>
-        <label class="field">
-          <span>Top loads</span>
-          <input id="topLoads" type="number" min="1" step="1" />
-          <small class="field-hint">How many best-paying loads the plan keeps, each with its suitable drivers.</small>
         </label>
       </div>
       <div class="field-row">
         <label class="field">
           <span>Rest after trip (h)</span>
           <input id="restHours" type="number" min="0" step="0.5" />
-          <small class="field-hint">Flat rest added once after a driver finishes a trip (simplified — not full tacho rules). Stacks with lead time. 0 = off.</small>
+          <small class="field-hint">Flat rest added once after a driver finishes a trip (simplified — not full tacho rules). 0 = off.</small>
         </label>
         <label class="field">
           <span>Availability lead (h)</span>
@@ -80,149 +65,67 @@
       <button id="saveAdmin" class="btn-secondary" type="button">Save settings</button>
     </div>
 
-    <!-- ── Load Planner (primary) ────────────────────────────────────────── -->
-    <section class="card">
-      <div class="card-head"><span class="card-title">Load Planner</span></div>
-      <div id="plannerProgress" class="hint">Idle.</div>
-      <button id="planBtn" class="btn-primary" type="button">Fetch Loads</button>
+    <!-- Developer setup: URLs, token, carrier, and scoring weights. Set once. -->
+    <button id="toggleDev" class="disclosure" type="button">Developer settings ▾</button>
+    <div id="devSettings" class="settings hidden">
+      <div class="settings-title">Developer · setup &amp; scoring</div>
+      <label class="field">
+        <span>Locations API URL (FleetYes/OnTrack)</span>
+        <input id="ontrackUrl" type="text" placeholder="https://ontrack-api.agilecyber.com/api/v1/rlb-locations" />
+        <small class="field-hint">FleetYes/OnTrack base — also used to derive the approved-places endpoint for unassigned drivers.</small>
+      </label>
+      <label class="field">
+        <span>Bearer token</span>
+        <input id="token" type="password" placeholder="flb_live_…" />
+        <small class="field-hint">FleetYes API key. Stored only in this browser — never committed to code.</small>
+      </label>
+      <label class="field">
+        <span>Carrier code</span>
+        <input id="carrierCode" type="text" placeholder="e.g. AMRTL" />
+        <small class="field-hint">Your carrier code, used for the FleetYes approved-places lookup (unassigned drivers).</small>
+      </label>
+      <label class="field check">
+        <input id="useFleetyesPlaces" type="checkbox" />
+        <span>Use FleetYes places for unassigned drivers</span>
+        <small class="field-hint">On: unassigned drivers are searched from your FleetYes approved places (by city). Off: their Relay home domicile.</small>
+      </label>
+      <label class="field">
+        <span>Relay base URL</span>
+        <input id="relayBase" type="text" placeholder="https://relay.amazon.co.uk" />
+        <small class="field-hint">Your Amazon Relay site (e.g. .co.uk for UK). Must match the tab you're logged into.</small>
+      </label>
+      <div class="settings-title">Scoring weights (relative)</div>
       <div class="field-row">
-        <button id="downloadReportBtn" class="btn-secondary" type="button" disabled>Download report (HTML)</button>
-        <button id="downloadPlanBtn" class="btn-secondary" type="button" disabled>Plan (JSON)</button>
+        <label class="field">
+          <span>Payout</span>
+          <input id="weightPayout" type="number" min="0" step="0.05" />
+          <small class="field-hint">Weight on total £ of the run.</small>
+        </label>
+        <label class="field">
+          <span>Rate</span>
+          <input id="weightRate" type="number" min="0" step="0.05" />
+          <small class="field-hint">Weight on £ per mile.</small>
+        </label>
+        <label class="field">
+          <span>Deadhead</span>
+          <input id="weightDeadhead" type="number" min="0" step="0.05" />
+          <small class="field-hint">Weight on fewer empty miles to pickup.</small>
+        </label>
       </div>
-      <div id="plannerLog" class="log" aria-live="polite"></div>
-    </section>
-
-    <!-- ── Secondary tools (collapsed by default) ────────────────────────── -->
-    <button id="toggleTools" class="disclosure" type="button">More tools ▾</button>
-
-    <div id="moreTools" class="hidden tools-group">
-      <!-- Developer settings: technical setup, set once. -->
-      <button id="toggleDev" class="link-btn dev-toggle" type="button">Developer settings ▾</button>
-      <div id="devSettings" class="settings hidden">
-        <div class="settings-title">Developer · setup &amp; scoring</div>
+      <div class="field-row">
         <label class="field">
-          <span>Locations API URL (GET/POST)</span>
-          <input id="ontrackUrl" type="text" placeholder="https://ontrack-api.agilecyber.com/api/v1/rlb-locations" />
-          <small class="field-hint">FleetYes/OnTrack endpoint. POST saves harvested cities; GET reads them back for Find Loads.</small>
+          <span>Timing</span>
+          <input id="weightTiming" type="number" min="0" step="0.05" />
+          <small class="field-hint">Weight on starting sooner.</small>
         </label>
         <label class="field">
-          <span>Loads ingest URL (POST, optional)</span>
-          <input id="ingestUrl" type="text" placeholder="optional — leave empty to download only" />
-          <small class="field-hint">Where found loads are sent. Leave blank to just download the JSON instead of uploading.</small>
+          <span>Reposition</span>
+          <input id="weightReposition" type="number" min="0" step="0.05" />
+          <small class="field-hint">Weight on finishing near where the driver started (avoids stranding far away).</small>
         </label>
-        <label class="field">
-          <span>Bearer token</span>
-          <input id="token" type="password" placeholder="flb_live_…" />
-          <small class="field-hint">FleetYes API key for the URLs above. Stored only in this browser — never committed to code.</small>
-        </label>
-        <label class="field">
-          <span>Carrier code</span>
-          <input id="carrierCode" type="text" placeholder="e.g. AMRTL" />
-          <small class="field-hint">Your carrier code, used for the FleetYes approved-places lookup (unassigned drivers).</small>
-        </label>
-        <label class="field check">
-          <input id="useFleetyesPlaces" type="checkbox" />
-          <span>Use FleetYes places for unassigned drivers</span>
-          <small class="field-hint">On: unassigned drivers are searched from your FleetYes approved places (by city). Off: their Relay home domicile.</small>
-        </label>
-        <label class="field">
-          <span>Relay base URL</span>
-          <input id="relayBase" type="text" placeholder="https://relay.amazon.co.uk" />
-          <small class="field-hint">Your Amazon Relay site (e.g. .co.uk for UK). Must match the tab you're logged into.</small>
-        </label>
-        <div class="field-row">
-          <label class="field">
-            <span>Prefix</span>
-            <input id="prefix" type="text" />
-            <small class="field-hint">Text put before each letter when searching cities, e.g. ", " → ", a".</small>
-          </label>
-          <label class="field">
-            <span>Letters</span>
-            <input id="letters" type="text" />
-            <small class="field-hint">Letters cycled through to enumerate all cities (a–z).</small>
-          </label>
-          <label class="field">
-            <span>Delay (ms)</span>
-            <input id="delayMs" type="number" min="0" step="50" />
-            <small class="field-hint">Pause between Relay calls. Higher = gentler, less chance of throttling.</small>
-          </label>
-        </div>
-        <div class="field-row">
-          <label class="field">
-            <span>Max locations (0 = all)</span>
-            <input id="maxLocations" type="number" min="0" step="1" />
-            <small class="field-hint">Cap for Find Loads — how many saved locations to search. 0 = every location.</small>
-          </label>
-          <label class="field">
-            <span>Loads per search</span>
-            <input id="resultSize" type="number" min="1" step="10" />
-            <small class="field-hint">Max loads Relay returns per search. Higher (~200) gives the planner more to choose from.</small>
-          </label>
-        </div>
-        <div class="settings-title">Scoring weights (relative)</div>
-        <div class="field-row">
-          <label class="field">
-            <span>Payout</span>
-            <input id="weightPayout" type="number" min="0" step="0.05" />
-            <small class="field-hint">Weight on total £ of the run.</small>
-          </label>
-          <label class="field">
-            <span>Rate</span>
-            <input id="weightRate" type="number" min="0" step="0.05" />
-            <small class="field-hint">Weight on £ per mile.</small>
-          </label>
-          <label class="field">
-            <span>Deadhead</span>
-            <input id="weightDeadhead" type="number" min="0" step="0.05" />
-            <small class="field-hint">Weight on fewer empty miles to pickup.</small>
-          </label>
-        </div>
-        <div class="field-row">
-          <label class="field">
-            <span>Timing</span>
-            <input id="weightTiming" type="number" min="0" step="0.05" />
-            <small class="field-hint">Weight on starting sooner.</small>
-          </label>
-          <label class="field">
-            <span>Reposition</span>
-            <input id="weightReposition" type="number" min="0" step="0.05" />
-            <small class="field-hint">Weight on finishing near where the driver started (avoids stranding far away).</small>
-          </label>
-        </div>
-        <button id="saveDev" class="btn-secondary" type="button">Save settings</button>
       </div>
-
-      <!-- Location Sync -->
-      <section class="card">
-        <div class="card-head"><span class="card-title">Location Sync</span></div>
-        <button id="syncBtn" class="btn-primary" type="button">Sync RLB Locations (a–z)</button>
-        <div id="syncLog" class="log" aria-live="polite"></div>
-      </section>
-
-      <!-- Find Loads -->
-      <section class="card">
-        <div class="card-head"><span class="card-title">Find Loads</span></div>
-        <div id="loadsProgress" class="hint">Idle.</div>
-        <button id="findLoadsBtn" class="btn-primary" type="button">Find Loads (all locations)</button>
-        <div class="field-row">
-          <button id="stopLoadsBtn" class="btn-secondary" type="button" disabled>Stop</button>
-          <button id="resumeLoadsBtn" class="btn-secondary" type="button" disabled>Resume</button>
-          <button id="retryFailedBtn" class="btn-secondary" type="button" disabled>Retry failed</button>
-        </div>
-        <button id="downloadLoadsBtn" class="btn-secondary" type="button" disabled>Download results (JSON)</button>
-        <div id="loadsLog" class="log" aria-live="polite"></div>
-      </section>
-
-      <!-- In-Transit Trips -->
-      <section class="card">
-        <div class="card-head"><span class="card-title">In-Transit Trips</span></div>
-        <div id="tripsProgress" class="hint">Idle.</div>
-        <button id="syncTripsBtn" class="btn-primary" type="button">Sync In-Transit Trips</button>
-        <button id="downloadTripsBtn" class="btn-secondary" type="button" disabled>Download trips (JSON)</button>
-        <div id="tripsLog" class="log" aria-live="polite"></div>
-      </section>
+      <button id="saveDev" class="btn-secondary" type="button">Save settings</button>
     </div>
-
   </div>
 
   <script src="popup.js"></script>
