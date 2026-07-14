@@ -19,6 +19,9 @@
   var tip = null;
   var observer = null;
   var scheduled = false;
+  var humanRefreshMin = 2; // seconds — lower bound of the randomized re-search interval
+  var humanRefreshMax = 5; // seconds — upper bound
+  var humanRefreshTimer = null;
 
   var esc = function (s) {
     return s == null ? "" : String(s).replace(/[&<>"']/g, function (c) {
@@ -85,6 +88,11 @@
       // Hide non-matching load cards when the filter is on (data-attr = React-safe,
       // same approach as the highlight outline — we never touch Relay's child nodes).
       "[data-rlb-hidden]{display:none!important;}",
+      // "Human refresh" min/max seconds — same chip styling as the filter above.
+      "#rlb-human-refresh,#rlb-human-refresh *{box-sizing:border-box;}",
+      "#rlb-human-refresh{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;white-space:nowrap;}",
+      "#rlb-human-refresh select{font:500 13px/1 inherit;color:#0f172a;border:1px solid #d5dbe5;border-radius:4px;padding:3px 4px;cursor:pointer;}",
+      "#rlb-human-refresh .sep{color:#94a3b8;}",
       // Progress / result card.
       "#rlb-card,#rlb-card *{box-sizing:border-box;}",
       "#rlb-card{position:fixed;top:122px;right:22px;width:340px;max-width:92vw;z-index:2147483000;background:#fff;border:1px solid #e5e9f0;border-radius:14px;box-shadow:0 14px 44px rgba(15,23,42,.24);font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;overflow:hidden;display:none;}",
@@ -194,6 +202,44 @@
       schedulePaint();
     });
 
+    // "Human refresh" — re-clicks Search loads on a random interval between the
+    // two dropdowns below, so the board refreshes on an irregular human-like
+    // cadence instead of a fixed timer (which is easy to detect as automation).
+    var SECONDS_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30, 45, 60];
+    var hr = document.createElement("div");
+    hr.id = "rlb-human-refresh";
+    hr.title = "Randomly re-run the current search every N seconds (N chosen between Min and Max each time) — a human-like refresh instead of a fixed timer.";
+    hr.innerHTML =
+      '<span>Refresh</span>' +
+      '<select id="rlb-hr-min"></select>' +
+      '<span class="sep">–</span>' +
+      '<select id="rlb-hr-max"></select>' +
+      '<span>s</span>';
+    document.body.appendChild(hr);
+    var minSel = hr.querySelector("#rlb-hr-min");
+    var maxSel = hr.querySelector("#rlb-hr-max");
+    SECONDS_OPTIONS.forEach(function (s) {
+      minSel.appendChild(new Option(String(s), String(s)));
+      maxSel.appendChild(new Option(String(s), String(s)));
+    });
+    minSel.value = String(humanRefreshMin);
+    maxSel.value = String(humanRefreshMax);
+    function persistHumanRefresh() {
+      try { chrome.storage.local.set({ humanRefreshMin: humanRefreshMin, humanRefreshMax: humanRefreshMax }); } catch (e) { /* context invalidated */ }
+    }
+    minSel.addEventListener("change", function () {
+      humanRefreshMin = Number(minSel.value) || 2;
+      if (humanRefreshMin > humanRefreshMax) { humanRefreshMax = humanRefreshMin; maxSel.value = String(humanRefreshMax); }
+      persistHumanRefresh();
+      scheduleHumanRefresh();
+    });
+    maxSel.addEventListener("change", function () {
+      humanRefreshMax = Number(maxSel.value) || 5;
+      if (humanRefreshMax < humanRefreshMin) { humanRefreshMin = humanRefreshMax; minSel.value = String(humanRefreshMin); }
+      persistHumanRefresh();
+      scheduleHumanRefresh();
+    });
+
     var card = document.createElement("div");
     card.id = "rlb-card";
     card.innerHTML =
@@ -236,6 +282,13 @@
       only.style.top = b.style.top;
       var leftAnchor = (bf || b).getBoundingClientRect();
       only.style.right = Math.max(12, window.innerWidth - leftAnchor.left + 10) + "px";
+    }
+    // The human-refresh chip sits further left still, same row.
+    var hr = document.getElementById("rlb-human-refresh");
+    if (hr) {
+      hr.style.top = b.style.top;
+      var onlyAnchor = (only || bf || b).getBoundingClientRect();
+      hr.style.right = Math.max(12, window.innerWidth - onlyAnchor.left + 10) + "px";
     }
   }
 
@@ -309,6 +362,48 @@
         schedulePaint();
       });
     } catch (e) { /* context invalidated */ }
+  }
+
+  // Restore the persisted Human Refresh min/max (seconds), sync the dropdowns,
+  // and (re)start the randomized refresh loop.
+  function loadHumanRefreshPref() {
+    try {
+      chrome.storage.local.get(["humanRefreshMin", "humanRefreshMax"], function (r) {
+        humanRefreshMin = Number(r.humanRefreshMin) || 2;
+        humanRefreshMax = Number(r.humanRefreshMax) || 5;
+        if (humanRefreshMax < humanRefreshMin) humanRefreshMax = humanRefreshMin;
+        var minSel = document.getElementById("rlb-hr-min");
+        var maxSel = document.getElementById("rlb-hr-max");
+        if (minSel) minSel.value = String(humanRefreshMin);
+        if (maxSel) maxSel.value = String(humanRefreshMax);
+        scheduleHumanRefresh();
+      });
+    } catch (e) { /* context invalidated */ }
+  }
+
+  // ── human refresh (randomized re-search) ────────────────────────────────────────
+  // Re-clicks Relay's own "Search loads" button after a random delay chosen fresh
+  // each time between humanRefreshMin/Max seconds, so results refresh on an
+  // irregular, human-like cadence rather than a fixed interval.
+  function randomRefreshDelayMs() {
+    var lo = Math.max(1, humanRefreshMin), hi = Math.max(lo, humanRefreshMax);
+    var secs = lo + Math.random() * (hi - lo);
+    return Math.round(secs * 1000);
+  }
+  function humanRefreshTick() {
+    humanRefreshTimer = null;
+    try {
+      if (onLoadboard()) {
+        var sb = findSearchButton();
+        if (sb && !sb.disabled && isVisible(sb)) realClick(sb);
+      }
+    } catch (e) { logError("humanRefreshTick", e); }
+    scheduleHumanRefresh();
+  }
+  function scheduleHumanRefresh() {
+    if (humanRefreshTimer) { clearTimeout(humanRefreshTimer); humanRefreshTimer = null; }
+    if (!onLoadboard()) return;
+    humanRefreshTimer = setTimeout(humanRefreshTick, randomRefreshDelayMs());
   }
 
   // ── driver availability ───────────────────────────────────────────────────────
@@ -1377,6 +1472,7 @@
     injectStyles();
     ensurePanel();
     loadOnlyMinePref();
+    loadHumanRefreshPref();
     loadDriverCount();
     replayBufferedSearch();
     observer = new MutationObserver(schedulePaint);
