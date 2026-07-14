@@ -38,6 +38,7 @@
     minTripMiles: 25,
     topLoads: 30,
     restHours: 0,
+    availabilityLeadHours: 2,
     maxWaitHours: 48,
     gapBeforeNextHours: 2,
     deadheadMph: 30,
@@ -73,6 +74,7 @@
     minTripMiles: $("minTripMiles"),
     topLoads: $("topLoads"),
     restHours: $("restHours"),
+    availabilityLeadHours: $("availabilityLeadHours"),
     maxWaitHours: $("maxWaitHours"),
     gapBeforeNextHours: $("gapBeforeNextHours"),
     deadheadMph: $("deadheadMph"),
@@ -131,6 +133,7 @@
       els.minTripMiles.value = cfg.minTripMiles;
       els.topLoads.value = cfg.topLoads;
       els.restHours.value = cfg.restHours;
+      els.availabilityLeadHours.value = cfg.availabilityLeadHours;
       els.maxWaitHours.value = cfg.maxWaitHours;
       els.gapBeforeNextHours.value = cfg.gapBeforeNextHours;
       els.deadheadMph.value = cfg.deadheadMph;
@@ -186,6 +189,7 @@
       minTripMiles: Math.max(0, parseInt(els.minTripMiles.value, 10) || DEFAULTS.minTripMiles),
       topLoads: Math.max(1, parseInt(els.topLoads.value, 10) || DEFAULTS.topLoads),
       restHours: numField(els.restHours, DEFAULTS.restHours),
+      availabilityLeadHours: numField(els.availabilityLeadHours, DEFAULTS.availabilityLeadHours),
       maxWaitHours: numField(els.maxWaitHours, DEFAULTS.maxWaitHours),
       gapBeforeNextHours: numField(els.gapBeforeNextHours, DEFAULTS.gapBeforeNextHours),
       deadheadMph: Math.max(1, parseFloat(els.deadheadMph.value) || DEFAULTS.deadheadMph),

@@ -34,6 +34,7 @@ const DEFAULTS = {
   topLoads: 30,
   // Planner timing rules (hours).
   restHours: 0, // rest after finishing a trip before the driver is available
+  availabilityLeadHours: 2, // treat a driver as free this long before the trip ends (earliest pickup = tripEnd − this)
   maxWaitHours: 48, // latest pickup = free + this
   gapBeforeNextHours: 2, // load must deliver this long before the next booked trip
   deadheadMph: 30, // effective speed over straight-line deadhead miles (road-time check)
@@ -1431,7 +1432,11 @@ function planLoadsForDriver(avail, response, cfg) {
   const freeMs = Date.parse(avail.freeAtEffective);
   const maxWaitH = numOr(cfg && cfg.maxWaitHours, 48);
   const gapBeforeNextH = numOr(cfg && cfg.gapBeforeNextHours, 0);
-  const lower = freeMs;
+  // Availability lead: treat the driver as free this long BEFORE the trip
+  // formally ends, so loads picking up slightly before tripEnd still match.
+  // Widens the window on the early side only — latest pickup is unchanged.
+  const matchFromMs = freeMs - numOr(cfg && cfg.availabilityLeadHours, 0) * HOUR_MS;
+  const lower = matchFromMs;
   let upper = freeMs + maxWaitH * HOUR_MS;
   // The next booked trip, minus the required gap before it, is the hard deadline.
   let effNext = null;
@@ -1479,9 +1484,10 @@ function planLoadsForDriver(avail, response, cfg) {
     const dhEff = computedDh != null ? computedDh : amazonDh;
     if (dhEff != null && dhEff > nearby) { droppedForDistance++; continue; }
     // Drive-time check: can the driver actually reach the pickup in time?
-    // free + (deadhead miles / speed) must not be after the pickup time.
+    // Departing at the lead-adjusted availability (matchFromMs), deadhead/speed
+    // must get them there by the pickup time.
     if (dhEff != null && mph > 0) {
-      const arriveMs = freeMs + (dhEff / mph) * HOUR_MS;
+      const arriveMs = matchFromMs + (dhEff / mph) * HOUR_MS;
       if (arriveMs > pk) { droppedForDriveTime++; continue; }
     }
     // Repositioning: how far the delivery leaves the driver from where they started.
