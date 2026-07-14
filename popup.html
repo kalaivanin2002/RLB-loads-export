@@ -47,6 +47,11 @@
           <input id="restHours" type="number" min="0" step="0.5" />
           <small class="field-hint">Flat rest added once after a driver finishes a trip (simplified — not full tacho rules). Stacks with lead time. 0 = off.</small>
         </label>
+        <label class="field">
+          <span>Availability lead (h)</span>
+          <input id="availabilityLeadHours" type="number" min="0" step="0.5" />
+          <small class="field-hint">Treat a driver as free this long before their trip ends — loads picking up this early are matched. 0 = only from trip end.</small>
+        </label>
       </div>
       <div class="field-row">
         <label class="field">
