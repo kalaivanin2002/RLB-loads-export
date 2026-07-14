@@ -85,6 +85,11 @@
       // Hide non-matching load cards when the filter is on (data-attr = React-safe,
       // same approach as the highlight outline — we never touch Relay's child nodes).
       "[data-rlb-hidden]{display:none!important;}",
+      // When the filter is on, the only visible cards are matches — so the outline,
+      // tint and badge are redundant. Suppress them (data-rlb-match stays on the node
+      // for counting / step-through; only its visual styling is neutralised here).
+      "html[data-rlb-filter] [data-rlb-match]{outline:none!important;background:transparent!important;}",
+      "html[data-rlb-filter] [data-rlb-badge]::after{display:none!important;}",
       // Progress / result card.
       "#rlb-card,#rlb-card *{box-sizing:border-box;}",
       "#rlb-card{position:fixed;top:122px;right:22px;width:340px;max-width:92vw;z-index:2147483000;background:#fff;border:1px solid #e5e9f0;border-radius:14px;box-shadow:0 14px 44px rgba(15,23,42,.24);font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;overflow:hidden;display:none;}",
@@ -229,13 +234,14 @@
       bf.style.top = b.style.top;
       bf.style.right = Math.max(12, window.innerWidth - br.left + 10) + "px";
     }
-    // The filter chip sits on the same row as the launcher buttons, to the left of
-    // the "unassigned" button — keeps the result card area (below) clear.
+    // The filter chip sits as its own row just BELOW the search panel's fields
+    // (Origin / Radius / Equipment), left-aligned under Origin. We can't inject into
+    // the React panel, so we overlay a fixed element aligned to the panel's bounds.
     var only = document.getElementById("rlb-only-mine");
     if (only) {
-      only.style.top = b.style.top;
-      var leftAnchor = (bf || b).getBoundingClientRect();
-      only.style.right = Math.max(12, window.innerWidth - leftAnchor.left + 10) + "px";
+      only.style.top = (r.bottom + 8) + "px";
+      only.style.right = "auto";
+      only.style.left = Math.max(8, r.left) + "px";
     }
   }
 
@@ -1292,6 +1298,10 @@
     var haveScores = false;
     for (var k in latest) { if (Object.prototype.hasOwnProperty.call(latest, k)) { haveScores = true; break; } }
     var hideOthers = onlyMyDrivers && haveScores;
+    // Filter on → drop the highlight styling (outline/tint/badge) via CSS; see the
+    // "html[data-rlb-filter]" rules. The match attributes themselves stay for counting.
+    if (onlyMyDrivers) document.documentElement.setAttribute("data-rlb-filter", "1");
+    else document.documentElement.removeAttribute("data-rlb-filter");
     var matched = 0;
     for (var i = 0; i < rows.length; i++) {
       var el = rows[i].el;
