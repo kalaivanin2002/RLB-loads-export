@@ -289,12 +289,14 @@
       only.style.right = "auto";
       only.style.left = Math.max(8, r.left) + "px";
     }
-    // The human-refresh chip sits further left still, same row.
+    // The human-refresh chip sits further left still, same row as the launcher
+    // buttons — anchor to (bf || b)'s rect, NOT `only`'s: `only` was just moved
+    // to its own row above, so its rect no longer reflects a "same row" position.
     var hr = document.getElementById("rlb-human-refresh");
     if (hr) {
       hr.style.top = b.style.top;
-      var onlyAnchor = (only || bf || b).getBoundingClientRect();
-      hr.style.right = Math.max(12, window.innerWidth - onlyAnchor.left + 10) + "px";
+      var leftAnchor = (bf || b).getBoundingClientRect();
+      hr.style.right = Math.max(12, window.innerWidth - leftAnchor.left + 10) + "px";
     }
   }
 
@@ -399,17 +401,36 @@
   function humanRefreshTick() {
     humanRefreshTimer = null;
     try {
-      if (onLoadboard()) {
+      // Never fire while our own autopilot is mid-fill (typing an origin
+      // city, opening the equipment popover, etc.) — a refresh landing in
+      // that window would submit a premature/incomplete search and corrupt
+      // the round in progress. Skip this beat; the loop still continues.
+      if (!onLoadboard()) {
+        console.log("[RLB refresh] tick: not on the loadboard page — skipping");
+      } else if (autofillBusy) {
+        console.log("[RLB refresh] tick: autopilot is busy — skipping this beat");
+      } else {
         var sb = findSearchButton();
-        if (sb && !sb.disabled && isVisible(sb)) realClick(sb);
+        if (!sb) {
+          console.log("[RLB refresh] tick: no \"Search loads\" button found — skipping");
+        } else if (sb.disabled) {
+          console.log("[RLB refresh] tick: \"Search loads\" button is disabled — skipping", sb);
+        } else if (!isVisible(sb)) {
+          console.log("[RLB refresh] tick: \"Search loads\" button not visible — skipping", sb);
+        } else {
+          console.log("[RLB refresh] tick: clicking \"Search loads\" now", sb);
+          realClick(sb);
+        }
       }
     } catch (e) { logError("humanRefreshTick", e); }
     scheduleHumanRefresh();
   }
   function scheduleHumanRefresh() {
     if (humanRefreshTimer) { clearTimeout(humanRefreshTimer); humanRefreshTimer = null; }
-    if (!onLoadboard()) return;
-    humanRefreshTimer = setTimeout(humanRefreshTick, randomRefreshDelayMs());
+    if (!onLoadboard()) { console.log("[RLB refresh] not on the loadboard page — not arming a refresh"); return; }
+    var delayMs = randomRefreshDelayMs();
+    humanRefreshTimer = setTimeout(humanRefreshTick, delayMs);
+    console.log("[RLB refresh] armed — next tick in " + Math.round(delayMs / 1000) + "s (min=" + humanRefreshMin + " max=" + humanRefreshMax + ")");
   }
 
   // ── driver availability ───────────────────────────────────────────────────────
@@ -1385,6 +1406,13 @@
     ensurePanel();
     positionLauncher();
     ensureAutoRefreshOff();
+    // Self-heal: scheduleHumanRefresh() refuses to arm while off the board,
+    // so navigating away and back via the SPA router (no full page reload,
+    // so boot() never re-runs) would otherwise leave the loop dead forever.
+    // Only re-arm when it's actually stopped — calling this unconditionally
+    // here would reset the countdown on every DOM mutation and the refresh
+    // could never fire on a busy page.
+    if (!humanRefreshTimer) scheduleHumanRefresh();
     var rows = loadRows();
     setPanel("rlb-rows", String(rows.length));
     clearPaint();

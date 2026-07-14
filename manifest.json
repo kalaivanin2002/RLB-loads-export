@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "RLB Load Search",
+  "name": "RLB Load Search Kalai",
   "version": "1.1.0",
   "description": "Amazon Relay load board helper: search loads per driver, and harvest RLB city locations into the OnTrack API.",
   "action": {
     "default_popup": "popup.html",
-    "default_title": "RLB Load Search"
+    "default_title": "RLB Load Search Kalai"
   },
   "permissions": ["scripting", "tabs", "storage", "unlimitedStorage", "alarms", "windows"],
   "host_permissions": [
