@@ -1426,36 +1426,38 @@
   // search, whose response flows back through hook.js → gets re-scored and
   // re-painted automatically (same pipeline as pagination/live search).
 
-  // Locate Relay's manual refresh/reload control in the utility bar. Defensive:
-  // the DOM has no stable id for it, so try several strategies and never return
-  // the auto-refresh switch itself (which we keep off).
+  // Locate Relay's manual refresh control. It's ICON-ONLY (an <svg aria-hidden>
+  // inside a <button> with no text/aria-label), so text matching can't find it.
+  // Its stable landmark is the ".refresh-and-chat-box" wrapper inside #utility-bar,
+  // which holds the "Turn on auto-refresh" label + the refresh button (+ chat).
+  // We target the refresh button structurally, and never the auto-refresh toggle.
   function findRelayRefreshControl() {
+    var norm = function (s) { return (s || "").replace(/\s+/g, " ").trim().toLowerCase(); };
     var bar = document.getElementById("utility-bar") || document;
-    var wantedRe = /(^|\b)(refresh|reload)(\b|$)/i;
-    var autoRe = /auto[\s-]?refresh/i;
-    var norm = function (s) { return (s || "").replace(/\s+/g, " ").trim(); };
+    var box = (bar.querySelector && bar.querySelector(".refresh-and-chat-box")) ||
+              document.querySelector(".refresh-and-chat-box") || bar;
 
-    // The native auto-refresh toggle — used to exclude it and its wrapping label.
-    var autoSwitch = bar.querySelector && bar.querySelector('input[role="switch"], [role="switch"]');
+    // The native auto-refresh control is the switch (or the <p>"…auto-refresh"</p>'s
+    // associated control) — exclude anything tied to it.
+    var autoSwitch = box.querySelector && box.querySelector('input[role="switch"], [role="switch"]');
 
-    var candidates = [].slice.call(
-      (bar.querySelectorAll ? bar : document).querySelectorAll('button, [role="button"], a[role="button"]')
-    );
-    for (var i = 0; i < candidates.length; i++) {
-      var el = candidates[i];
+    var buttons = [].slice.call(box.querySelectorAll ? box.querySelectorAll('button, [role="button"]') : []);
+    var refreshBtn = null;
+    for (var i = 0; i < buttons.length; i++) {
+      var el = buttons[i];
       if (autoSwitch && (el === autoSwitch || el.contains(autoSwitch) || (autoSwitch.contains && autoSwitch.contains(el)))) continue;
-      var aria = norm(el.getAttribute && el.getAttribute("aria-label"));
-      var title = norm(el.getAttribute && el.getAttribute("title"));
-      var text = norm(el.textContent);
-      var hay = aria || title || text;
-      // Must mention refresh/reload but NOT be the "auto-refresh" toggle.
-      if (autoRe.test(hay)) continue;
-      if (wantedRe.test(aria) || wantedRe.test(title) || wantedRe.test(text)) return el;
-      // Icon-only buttons: check a data-testid / class hint as a last resort.
-      var testid = norm(el.getAttribute && el.getAttribute("data-testid"));
-      if (wantedRe.test(testid) && !autoRe.test(testid)) return el;
+      var label = norm((el.getAttribute && (el.getAttribute("aria-label") || el.getAttribute("title"))) || el.textContent);
+      // Skip the auto-refresh toggle and the chat button — leave only refresh.
+      if (/auto[\s-]?refresh/.test(label)) continue;
+      if (/chat|message|help|support/.test(label)) continue;
+      // First non-excluded button in this box is the refresh control. Prefer one
+      // whose label/testid explicitly says refresh/reload if present, else take it.
+      if (/refresh|reload/.test(label) || /refresh|reload/.test(norm(el.getAttribute && el.getAttribute("data-testid")))) {
+        return el;
+      }
+      if (!refreshBtn) refreshBtn = el; // icon-only fallback (no label at all)
     }
-    return null;
+    return refreshBtn;
   }
 
   // Fire one refresh: click Relay's control if found. Returns true if it clicked.
