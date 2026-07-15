@@ -70,11 +70,15 @@
       "[data-rlb-match='strong']{outline-color:#16a34a!important;background:rgba(22,163,74,.08)!important;}",
       "[data-rlb-badge]::after{content:attr(data-rlb-badge);position:absolute;top:6px;left:6px;z-index:5;background:#f59e0b;color:#fff;font:600 11px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:3px 6px;border-radius:5px;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,.25);}",
       "[data-rlb-match='strong'][data-rlb-badge]::after{background:#16a34a;}",
-      "#rlb-tip{position:fixed;z-index:2147483647;max-width:340px;background:#0f172a;color:#e2e8f0;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);pointer-events:none;display:none;}",
+      "#rlb-tip{position:fixed;z-index:2147483647;max-width:480px;background:#0f172a;color:#e2e8f0;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);pointer-events:none;display:none;}",
       "#rlb-tip .h{font-weight:700;margin-bottom:6px;color:#fff;}",
+      // Compact, borderless grid — only the header row gets a thin underline, so it
+      // reads as labels above a plain list rather than a bordered spreadsheet.
       "#rlb-tip table{width:100%;border-collapse:collapse;}",
-      "#rlb-tip td{padding:2px 6px 2px 0;white-space:nowrap;}",
-      "#rlb-tip th{padding:2px 6px 4px 0;white-space:nowrap;text-align:left;color:#94a3b8;font-weight:600;font-size:11px;border-bottom:1px solid #334155;}",
+      "#rlb-tip td{padding:3px 8px 3px 0;white-space:nowrap;border:none;}",
+      "#rlb-tip td:not(:first-child){text-align:right;}",
+      "#rlb-tip th{padding:0 8px 5px 0;white-space:nowrap;text-align:left;color:#94a3b8;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none;border-bottom:1px solid #334155;}",
+      "#rlb-tip th:not(:first-child){text-align:right;}",
       "#rlb-tip tr.b td{color:#4ade80;font-weight:600;}",
       // Hero launcher button (top-right, near the search).
       "#rlb-launch,#rlb-launch *{box-sizing:border-box;}",
@@ -1534,20 +1538,22 @@
     var info = e.currentTarget.__rlbInfo;
     if (!info) return;
     var t = ensureTip();
+    // Compact rows: driver name + inline "value unit" cells (e.g. "0.1mi", "22.6h"),
+    // no cell borders — a short header row above labels each column.
     var rows = (info.suitableDrivers || []).map(function (d, i) {
       var name = d.driver && d.driver.name ? d.driver.name : "(unknown)";
       return (
         '<tr class="' + (i === 0 ? "b" : "") + '"><td>' + esc(name) + "</td><td>" +
-        n1(d.deadheadMiles) + "</td><td>" + (d.returnMiles == null ? "—" : n1(d.returnMiles)) + "</td><td>" +
-        n1(d.pickupGapHours) + "</td><td>" + n1(d.fitScore != null ? d.fitScore * 100 : null) + "</td></tr>"
+        n1(d.deadheadMiles) + "mi</td><td>" + (d.returnMiles == null ? "—" : n1(d.returnMiles) + "mi") + "</td><td>" +
+        n1(d.pickupGapHours) + "h</td><td>" + n1(d.fitScore != null ? d.fitScore * 100 : null) + "</td></tr>"
       );
     }).join("");
     var pc = info.pickup && info.pickup.city, dc = info.dropoff && info.dropoff.city;
-    // Column headers so the numbers read clearly: empty miles to pickup, miles the
-    // delivery leaves them from start, hours until pickup, and the 0–100 fit score.
+    // Short column headers so the numbers read clearly: empty miles to pickup, miles
+    // the delivery leaves them from start, hours until pickup, the 0–100 fit score.
     var head =
-      "<thead><tr><th>Driver</th><th>Deadhead (mi)</th><th>Return (mi)</th>" +
-      "<th>Pickup in (h)</th><th>Fit</th></tr></thead>";
+      "<thead><tr><th>Driver</th><th>Deadhead</th><th>Return</th>" +
+      "<th>Pickup</th><th>Fit</th></tr></thead>";
     t.innerHTML =
       '<div class="h">£' + (info.payout != null ? Math.round(info.payout) : "—") + " · " + esc(pc) + " → " + esc(dc) +
       " · " + esc(info.workType === "ROUND_TRIP" ? "Round trip" : info.workType === "ONE_WAY" ? "One-way" : info.workType || "") + "</div>" +
@@ -1559,10 +1565,13 @@
   function onLeave() { if (tip) tip.style.display = "none"; }
   function positionTip(e) {
     if (!tip) return;
-    var pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
-    var x = e.clientX + pad, y = e.clientY + pad;
-    if (x + w > window.innerWidth) x = e.clientX - w - pad;
-    if (y + h > window.innerHeight) y = e.clientY - h - pad;
+    // padY is larger than padX: Relay's own hover tooltips (e.g. the full stop
+    // address) tend to open just above/at the cursor, so a bigger vertical
+    // offset keeps ours from landing on top of theirs.
+    var padX = 16, padY = 28, w = tip.offsetWidth, h = tip.offsetHeight;
+    var x = e.clientX + padX, y = e.clientY + padY;
+    if (x + w > window.innerWidth) x = e.clientX - w - padX;
+    if (y + h > window.innerHeight) y = e.clientY - h - padY;
     tip.style.left = Math.max(4, x) + "px";
     tip.style.top = Math.max(4, y) + "px";
   }
