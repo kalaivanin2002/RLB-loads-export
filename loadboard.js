@@ -70,26 +70,30 @@
       "[data-rlb-match='strong']{outline-color:#16a34a!important;background:rgba(22,163,74,.08)!important;}",
       "[data-rlb-badge]::after{content:attr(data-rlb-badge);position:absolute;top:6px;left:6px;z-index:5;background:#f59e0b;color:#fff;font:600 11px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:3px 6px;border-radius:5px;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,.25);}",
       "[data-rlb-match='strong'][data-rlb-badge]::after{background:#16a34a;}",
-      // Red corner dot (top-right) on a load card when ANY of its drivers matches
-      // via the availability lead (pickup before their drop-off). Uses ::before so
-      // it doesn't collide with the ::after driver-count badge in the top-left.
-      "[data-rlb-lead]::before{content:'';position:absolute;top:8px;right:8px;z-index:6;width:11px;height:11px;border-radius:50%;background:#dc2626;box-shadow:0 0 0 3px rgba(220,38,38,.18),0 1px 2px rgba(0,0,0,.3);pointer-events:none;}",
+      // EARLY badge for loads with a driver matched via the availability lead
+      // (pickup before drop-off). Rendered via the card's ::before — NO DOM node is
+      // inserted into Relay's React tree — and positioned in JS (positionEarlyBadge)
+      // to sit on the status row, just right of the "Live" label (between Live and
+      // the Amount). Position is scroll-invariant (::before is absolute in the card).
+      "[data-rlb-lead]::before{content:'EARLY';position:absolute;left:var(--rlb-early-left,8px);top:var(--rlb-early-top,8px);z-index:6;background:#b91c1c;color:#fff;font:700 10px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:4px 6px;border-radius:4px;letter-spacing:.04em;box-shadow:0 1px 2px rgba(0,0,0,.3);pointer-events:none;white-space:nowrap;}",
       "#rlb-tip{position:fixed;z-index:2147483647;max-width:340px;background:#0f172a;color:#e2e8f0;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);pointer-events:none;display:none;}",
       // Solid near-black tooltip: no borders, no header underline, full-brightness
       // white text on every row (no dimming/opacity). Keeps the tabular columns.
-      "#rlb-tip{position:fixed;z-index:2147483647;max-width:480px;background:#0b0f19;color:#ffffff;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:none;display:none;}",
-      "#rlb-tip .h{font-weight:700;margin-bottom:6px;color:#fff;}",
+      "#rlb-tip{position:fixed;z-index:2147483647;max-width:360px;background:#0b0f19;color:#ffffff;font:12px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:none;display:none;}",
+      "#rlb-tip .h{font-weight:700;margin-bottom:4px;color:#fff;}",
       "#rlb-tip table{width:100%;border-collapse:collapse;}",
-      "#rlb-tip td{padding:3px 8px 3px 0;white-space:nowrap;border:none;color:#ffffff;}",
+      "#rlb-tip td{padding:2px 6px 2px 0;white-space:nowrap;border:none;color:#ffffff;font-size:11px;}",
+      // Driver name truncates (single line + ellipsis) so a long name keeps the row a
+      // uniform height and the tooltip narrow; full name still shows on hover.
+      "#rlb-tip .rlb-dname{display:inline-block;max-width:108px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;}",
       "#rlb-tip td:not(:first-child){text-align:right;}",
-      "#rlb-tip th{padding:0 8px 5px 0;white-space:nowrap;text-align:left;color:#ffffff;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none;}",
+      "#rlb-tip th{padding:0 6px 3px 0;white-space:nowrap;text-align:left;color:#ffffff;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none;}",
       "#rlb-tip th:not(:first-child){text-align:right;}",
-      "#rlb-tip tr.b td{color:#4ade80;font-weight:600;}",
-      // Drivers whose match relies on the availability lead — the load picks up
-      // BEFORE their drop-off/free time — are flagged red (see onEnter). Placed
-      // after .b so the red warning wins when the best-fit driver is also early.
-      "#rlb-tip tr.lead td{color:#f87171;}",
-      "#rlb-tip .rlb-lead{display:inline-block;margin-left:6px;background:#dc2626;color:#fff;font:600 10px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:2px 5px;border-radius:4px;vertical-align:middle;text-transform:uppercase;letter-spacing:.03em;}",
+      "#rlb-tip tr.b td{color:#4ade80;}",
+      // Drivers whose match relies on the availability lead (pickup before drop-off)
+      // are indicated by red text ONLY — same font/size as the other names, no badge.
+      // Placed after .b so red wins when the best-fit driver is also a lead match.
+      "#rlb-tip tr.lead td{color:#ff6b6b;}",
       // Hero launcher button (top-right, near the search).
       "#rlb-launch,#rlb-launch *{box-sizing:border-box;}",
       "#rlb-launch{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:rgb(0,104,141);color:#fff;border:none;border-radius:4px;padding:12px 20px;font:500 14px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:none;transition:background-color .15s ease;}",
@@ -130,7 +134,10 @@
       "#rlb-card .head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;background:#0f172a;color:#fff;}",
       "#rlb-card .head b{font-size:14px;}",
       "#rlb-card .head button{background:transparent;border:none;color:#cbd5e1;font-size:18px;line-height:1;cursor:pointer;}",
+      "#rlb-card .head .head-actions{display:inline-flex;align-items:center;gap:4px;}",
       "#rlb-card .body{padding:16px;}",
+      // Minimized: collapse to just the header bar (toggled by the ▾ button).
+      "#rlb-card.min .body{display:none;}",
       "#rlb-card .step{display:flex;align-items:center;gap:10px;padding:5px 0;color:#94a3b8;}",
       "#rlb-card .step.active{color:#1e293b;font-weight:600;}",
       "#rlb-card .step.done{color:#16a34a;}",
@@ -158,14 +165,17 @@
       // Matches the launcher button's teal so it reads as "this extension" feedback.
       "[data-rlb-flash]{outline:3px solid rgb(0,104,141)!important;outline-offset:-3px;}",
       // Drivers verification overlay (spot-check computed drop-offs vs Relay).
-      "#rlb-drivers{position:fixed;top:60px;left:16px;z-index:2147483200;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.28);font:12px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;width:560px;max-width:92vw;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;}",
-      "#rlb-drivers .t{background:#0f172a;color:#fff;font-weight:700;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;cursor:move;}",
-      "#rlb-drivers .t button{background:transparent;color:#fff;border:none;font-size:16px;cursor:pointer;line-height:1;}",
+      // Drivers overlay restyled to match the dark hover tooltip (#rlb-tip):
+      // near-black bg, full-white text, subtle dark separators, and warn rows
+      // using the same red wash as the tooltip's lead rows.
+      "#rlb-drivers{position:fixed;top:60px;left:16px;z-index:2147483200;background:#0b0f19;border:1px solid #1f2937;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.5);font:12px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;color:#fff;width:560px;max-width:92vw;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;}",
+      "#rlb-drivers .t{background:#0b0f19;color:#fff;font-weight:700;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;cursor:move;border-bottom:1px solid #1f2937;}",
+      "#rlb-drivers .t button{background:transparent;color:#cbd5e1;border:none;font-size:16px;cursor:pointer;line-height:1;}",
       "#rlb-drivers .body{overflow:auto;padding:0;}",
       "#rlb-drivers table{width:100%;border-collapse:collapse;}",
-      "#rlb-drivers th,#rlb-drivers td{padding:6px 10px;text-align:left;border-bottom:1px solid #f1f5f9;white-space:nowrap;}",
-      "#rlb-drivers th{position:sticky;top:0;background:#f8fafc;font-weight:600;color:#475569;z-index:1;}",
-      "#rlb-drivers tr.warn td{background:#fef2f2;color:#b91c1c;}",
+      "#rlb-drivers th,#rlb-drivers td{padding:6px 10px;text-align:left;border-bottom:1px solid #1f2937;white-space:nowrap;color:#fff;}",
+      "#rlb-drivers th{position:sticky;top:0;background:#0b0f19;font-weight:600;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.04em;z-index:1;}",
+      "#rlb-drivers tr.warn td{background:rgba(239,68,68,.16);color:#ff6b6b;}",
       "#rlb-drivers .sub{color:#94a3b8;font-size:11px;}",
     ].join("");
     var st = document.createElement("style");
@@ -235,10 +245,14 @@
     var card = document.createElement("div");
     card.id = "rlb-card";
     card.innerHTML =
-      '<div class="head"><b>⚡ Best loads</b><button id="rlb-card-x" type="button" title="Close">×</button></div>' +
+      '<div class="head"><b>⚡ Best loads</b><span class="head-actions">' +
+      '<button id="rlb-card-min" type="button" title="Minimize">▾</button>' +
+      '<button id="rlb-card-x" type="button" title="Close">×</button></span></div>' +
       '<div class="body"><div id="rlb-card-content"></div></div>';
     document.body.appendChild(card);
     card.querySelector("#rlb-card-x").addEventListener("click", hideCard);
+    var minBtn = card.querySelector("#rlb-card-min");
+    if (minBtn) minBtn.addEventListener("click", toggleMinCard);
 
     positionLauncher();
     window.addEventListener("scroll", positionLauncher, true);
@@ -300,8 +314,23 @@
     }
   }
 
-  function showCard() { var c = document.getElementById("rlb-card"); if (c) c.classList.add("show"); }
+  function showCard() {
+    // A fresh show (e.g. clicking ⚡ again) re-expands a previously minimized card.
+    var c = document.getElementById("rlb-card");
+    if (c) { c.classList.add("show"); c.classList.remove("min"); }
+    var mn = document.getElementById("rlb-card-min");
+    if (mn) { mn.textContent = "▾"; mn.title = "Minimize"; }
+  }
   function hideCard() { var c = document.getElementById("rlb-card"); if (c) c.classList.remove("show"); }
+  // Collapse the card to just its header bar; click again to expand. Content is
+  // kept (not cleared), so expanding restores whatever was showing.
+  function toggleMinCard() {
+    var c = document.getElementById("rlb-card");
+    if (!c) return;
+    var min = c.classList.toggle("min");
+    var b = document.getElementById("rlb-card-min");
+    if (b) { b.textContent = min ? "▸" : "▾"; b.title = min ? "Expand" : "Minimize"; }
+  }
   function setCard(html) { var el = document.getElementById("rlb-card-content"); if (el) el.innerHTML = html; }
   // Both launcher buttons share one busy state — only one autopilot run
   // (of either kind) can be in flight at a time (see autofillBusy).
@@ -1341,6 +1370,33 @@
     if (observer) observer.disconnect();
     try { doPaint(); } finally { if (observer && document.body) observer.observe(document.body, { childList: true, subtree: true }); }
   }
+  // Find the "Live" status label inside a card — a leaf element whose own text is
+  // exactly "Live". Used to anchor the EARLY badge on the same row, just after it.
+  function findLiveEl(card) {
+    var els = card.querySelectorAll("*");
+    for (var i = 0; i < els.length; i++) {
+      if ((els[i].textContent || "").replace(/\s+/g, " ").trim() === "Live") return els[i];
+    }
+    return null;
+  }
+  // Place the EARLY badge (the card's ::before) on the status row, immediately
+  // right of the "Live" label — i.e. between Live and the Amount. Computed from the
+  // live rects so it tracks the real layout; scroll-invariant (::before is absolute
+  // within the card). Falls back to bottom-right if "Live" isn't found.
+  function positionEarlyBadge(card) {
+    var cr = card.getBoundingClientRect();
+    var live = findLiveEl(card);
+    var left, top;
+    if (live) {
+      var lr = live.getBoundingClientRect();
+      left = (lr.right - cr.left) + 6;                 // just right of "Live"
+      top = (lr.top - cr.top) + (lr.height - 18) / 2;  // center on the row (~badge height 18)
+    } else {
+      left = cr.width - 64; top = cr.height - 22;      // fallback: bottom-right
+    }
+    card.style.setProperty("--rlb-early-left", left + "px");
+    card.style.setProperty("--rlb-early-top", top + "px");
+  }
   function doPaint() {
     if (!onLoadboard()) return; // injected on all Relay pages; only act on the board
     ensurePanel();
@@ -1370,9 +1426,10 @@
       matched++;
       target.setAttribute("data-rlb-match", info.bestScore >= 0.85 ? "strong" : "weak");
       target.setAttribute("data-rlb-badge", "▲ " + info.driverCount + (info.driverCount === 1 ? " driver" : " drivers"));
-      // Red corner dot when ≥1 driver matches via the lead (pickup before drop-off).
+      // EARLY badge when ≥1 driver matches via the lead (pickup before drop-off).
       if ((info.suitableDrivers || []).some(function (d) { return driverUsesLead(info, d); })) {
         target.setAttribute("data-rlb-lead", "1");
+        positionEarlyBadge(target); // place on the status row, just right of "Live"
       }
       target.__rlbInfo = info;
       if (!target.__rlbBound) {
@@ -1568,11 +1625,8 @@
       var name = d.driver && d.driver.name ? d.driver.name : "(unknown)";
       var usesLead = driverUsesLead(info, d); // pickup before drop-off → matches via the lead
       var cls = (i === 0 ? "b" : "") + (usesLead ? " lead" : "");
-      var label = usesLead
-        ? ' <span class="rlb-lead" title="Pickup is before this driver’s drop-off time — matches only via the availability lead.">early</span>'
-        : "";
       return (
-        '<tr class="' + cls + '"><td>' + esc(name) + label + "</td><td>" +
+        '<tr class="' + cls + '"><td><span class="rlb-dname" title="' + esc(name) + '">' + esc(name) + "</span></td><td>" +
         n1(d.deadheadMiles) + "mi</td><td>" + (d.returnMiles == null ? "—" : n1(d.returnMiles) + "mi") + "</td><td>" +
         n1(d.pickupGapHours) + "h</td><td>" + n1(d.fitScore != null ? d.fitScore * 100 : null) + "</td></tr>"
       );
