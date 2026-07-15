@@ -70,12 +70,21 @@
       "[data-rlb-match='strong']{outline-color:#16a34a!important;background:rgba(22,163,74,.08)!important;}",
       "[data-rlb-badge]::after{content:attr(data-rlb-badge);position:absolute;top:6px;left:6px;z-index:5;background:#f59e0b;color:#fff;font:600 11px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:3px 6px;border-radius:5px;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,.25);}",
       "[data-rlb-match='strong'][data-rlb-badge]::after{background:#16a34a;}",
+      // Red corner dot (top-right) on a load card when ANY of its drivers matches
+      // via the availability lead (pickup before their drop-off). Uses ::before so
+      // it doesn't collide with the ::after driver-count badge in the top-left.
+      "[data-rlb-lead]::before{content:'';position:absolute;top:8px;right:8px;z-index:6;width:11px;height:11px;border-radius:50%;background:#dc2626;box-shadow:0 0 0 3px rgba(220,38,38,.18),0 1px 2px rgba(0,0,0,.3);pointer-events:none;}",
       "#rlb-tip{position:fixed;z-index:2147483647;max-width:340px;background:#0f172a;color:#e2e8f0;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);pointer-events:none;display:none;}",
       "#rlb-tip .h{font-weight:700;margin-bottom:6px;color:#fff;}",
       "#rlb-tip table{width:100%;border-collapse:collapse;}",
       "#rlb-tip td{padding:2px 6px 2px 0;white-space:nowrap;}",
       "#rlb-tip th{padding:2px 6px 4px 0;white-space:nowrap;text-align:left;color:#94a3b8;font-weight:600;font-size:11px;border-bottom:1px solid #334155;}",
       "#rlb-tip tr.b td{color:#4ade80;font-weight:600;}",
+      // Drivers whose match relies on the availability lead — the load picks up
+      // BEFORE their drop-off/free time — are flagged red (see onEnter). Placed
+      // after .b so the red warning wins when the best-fit driver is also early.
+      "#rlb-tip tr.lead td{color:#f87171;}",
+      "#rlb-tip .rlb-lead{display:inline-block;margin-left:6px;background:#dc2626;color:#fff;font:600 10px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:2px 5px;border-radius:4px;vertical-align:middle;text-transform:uppercase;letter-spacing:.03em;}",
       // Hero launcher button (top-right, near the search).
       "#rlb-launch,#rlb-launch *{box-sizing:border-box;}",
       "#rlb-launch{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:rgb(0,104,141);color:#fff;border:none;border-radius:4px;padding:12px 20px;font:500 14px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:none;transition:background-color .15s ease;}",
@@ -1333,6 +1342,7 @@
     for (var j = 0; j < m.length; j++) {
       m[j].removeAttribute("data-rlb-match");
       m[j].removeAttribute("data-rlb-badge");
+      m[j].removeAttribute("data-rlb-lead");
       m[j].__rlbInfo = null;
     }
     // Reveal anything the "only my drivers" filter hid — doPaint re-hides as needed.
@@ -1377,6 +1387,10 @@
       matched++;
       target.setAttribute("data-rlb-match", info.bestScore >= 0.85 ? "strong" : "weak");
       target.setAttribute("data-rlb-badge", "▲ " + info.driverCount + (info.driverCount === 1 ? " driver" : " drivers"));
+      // Red corner dot when ≥1 driver matches via the lead (pickup before drop-off).
+      if ((info.suitableDrivers || []).some(function (d) { return driverUsesLead(info, d); })) {
+        target.setAttribute("data-rlb-lead", "1");
+      }
       target.__rlbInfo = info;
       if (!target.__rlbBound) {
         target.__rlbBound = true;
@@ -1552,14 +1566,28 @@
     document.body.appendChild(tip);
     return tip;
   }
+  // True when this load picks up BEFORE the given driver's drop-off/free time
+  // (availableFrom) — i.e. the match only works because availability was relaxed
+  // by the configured lead (e.g. −2h). Single rule shared by the tooltip's red
+  // "early" driver label and the load card's red corner dot (see doPaint).
+  function driverUsesLead(info, d) {
+    var pkMs = info && info.pickup && info.pickup.time ? Date.parse(info.pickup.time) : NaN;
+    var fMs = d && d.availableFrom ? Date.parse(d.availableFrom) : NaN;
+    return !isNaN(pkMs) && !isNaN(fMs) && pkMs < fMs;
+  }
   function onEnter(e) {
     var info = e.currentTarget.__rlbInfo;
     if (!info) return;
     var t = ensureTip();
     var rows = (info.suitableDrivers || []).map(function (d, i) {
       var name = d.driver && d.driver.name ? d.driver.name : "(unknown)";
+      var usesLead = driverUsesLead(info, d); // pickup before drop-off → matches via the lead
+      var cls = (i === 0 ? "b" : "") + (usesLead ? " lead" : "");
+      var label = usesLead
+        ? ' <span class="rlb-lead" title="Pickup is before this driver’s drop-off time — matches only via the availability lead.">early</span>'
+        : "";
       return (
-        '<tr class="' + (i === 0 ? "b" : "") + '"><td>' + esc(name) + "</td><td>" +
+        '<tr class="' + cls + '"><td>' + esc(name) + label + "</td><td>" +
         n1(d.deadheadMiles) + "</td><td>" + (d.returnMiles == null ? "—" : n1(d.returnMiles)) + "</td><td>" +
         n1(d.pickupGapHours) + "</td><td>" + n1(d.fitScore != null ? d.fitScore * 100 : null) + "</td></tr>"
       );
