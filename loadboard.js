@@ -75,7 +75,7 @@
       // inserted into Relay's React tree — and positioned in JS (positionEarlyBadge)
       // to sit on the status row, just right of the "Live" label (between Live and
       // the Amount). Position is scroll-invariant (::before is absolute in the card).
-      "[data-rlb-lead]::before{content:'EARLY';position:absolute;left:var(--rlb-early-left,8px);top:var(--rlb-early-top,8px);z-index:6;background:#ef4444;color:#fff;font:700 9px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:3px 5px;border-radius:4px;letter-spacing:.04em;box-shadow:0 0 0 1px rgba(255,255,255,.2),0 1px 2px rgba(0,0,0,.4);pointer-events:none;white-space:nowrap;}",
+      "[data-rlb-lead]::before{content:'EARLY';position:absolute;left:var(--rlb-early-left,8px);top:var(--rlb-early-top,8px);z-index:6;background:#b91c1c;color:#fff;font:700 10px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:4px 6px;border-radius:4px;letter-spacing:.04em;box-shadow:0 1px 2px rgba(0,0,0,.3);pointer-events:none;white-space:nowrap;}",
       "#rlb-tip{position:fixed;z-index:2147483647;max-width:340px;background:#0f172a;color:#e2e8f0;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);pointer-events:none;display:none;}",
       // Solid near-black tooltip: no borders, no header underline, full-brightness
       // white text on every row (no dimming/opacity). Keeps the tabular columns.
@@ -165,14 +165,17 @@
       // Matches the launcher button's teal so it reads as "this extension" feedback.
       "[data-rlb-flash]{outline:3px solid rgb(0,104,141)!important;outline-offset:-3px;}",
       // Drivers verification overlay (spot-check computed drop-offs vs Relay).
-      "#rlb-drivers{position:fixed;top:60px;left:16px;z-index:2147483200;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.28);font:12px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;width:560px;max-width:92vw;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;}",
-      "#rlb-drivers .t{background:#0f172a;color:#fff;font-weight:700;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;cursor:move;}",
-      "#rlb-drivers .t button{background:transparent;color:#fff;border:none;font-size:16px;cursor:pointer;line-height:1;}",
+      // Drivers overlay restyled to match the dark hover tooltip (#rlb-tip):
+      // near-black bg, full-white text, subtle dark separators, and warn rows
+      // using the same red wash as the tooltip's lead rows.
+      "#rlb-drivers{position:fixed;top:60px;left:16px;z-index:2147483200;background:#0b0f19;border:1px solid #1f2937;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.5);font:12px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;color:#fff;width:560px;max-width:92vw;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;}",
+      "#rlb-drivers .t{background:#0b0f19;color:#fff;font-weight:700;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;cursor:move;border-bottom:1px solid #1f2937;}",
+      "#rlb-drivers .t button{background:transparent;color:#cbd5e1;border:none;font-size:16px;cursor:pointer;line-height:1;}",
       "#rlb-drivers .body{overflow:auto;padding:0;}",
       "#rlb-drivers table{width:100%;border-collapse:collapse;}",
-      "#rlb-drivers th,#rlb-drivers td{padding:6px 10px;text-align:left;border-bottom:1px solid #f1f5f9;white-space:nowrap;}",
-      "#rlb-drivers th{position:sticky;top:0;background:#f8fafc;font-weight:600;color:#475569;z-index:1;}",
-      "#rlb-drivers tr.warn td{background:#fef2f2;color:#b91c1c;}",
+      "#rlb-drivers th,#rlb-drivers td{padding:6px 10px;text-align:left;border-bottom:1px solid #1f2937;white-space:nowrap;color:#fff;}",
+      "#rlb-drivers th{position:sticky;top:0;background:#0b0f19;font-weight:600;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.04em;z-index:1;}",
+      "#rlb-drivers tr.warn td{background:rgba(239,68,68,.16);color:#ff6b6b;}",
       "#rlb-drivers .sub{color:#94a3b8;font-size:11px;}",
     ].join("");
     var st = document.createElement("style");
@@ -1387,7 +1390,7 @@
     if (live) {
       var lr = live.getBoundingClientRect();
       left = (lr.right - cr.left) + 6;                 // just right of "Live"
-      top = (lr.top - cr.top) + (lr.height - 14) / 2;  // center on the row
+      top = (lr.top - cr.top) + (lr.height - 18) / 2;  // center on the row (~badge height 18)
     } else {
       left = cr.width - 64; top = cr.height - 22;      // fallback: bottom-right
     }
