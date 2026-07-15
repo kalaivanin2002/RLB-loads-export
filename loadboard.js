@@ -89,7 +89,7 @@
       "#rlb-tip td:not(:first-child){text-align:right;}",
       "#rlb-tip th{padding:0 6px 3px 0;white-space:nowrap;text-align:left;color:#ffffff;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none;}",
       "#rlb-tip th:not(:first-child){text-align:right;}",
-      "#rlb-tip tr.b td{color:#4ade80;font-weight:600;}",
+      "#rlb-tip tr.b td{color:#4ade80;}",
       // Drivers whose match relies on the availability lead (pickup before drop-off)
       // are indicated by red text ONLY — same font/size as the other names, no badge.
       // Placed after .b so red wins when the best-fit driver is also a lead match.
