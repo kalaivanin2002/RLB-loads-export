@@ -75,14 +75,14 @@
       // it doesn't collide with the ::after driver-count badge in the top-left.
       "[data-rlb-lead]::before{content:'';position:absolute;top:8px;right:8px;z-index:6;width:11px;height:11px;border-radius:50%;background:#dc2626;box-shadow:0 0 0 3px rgba(220,38,38,.18),0 1px 2px rgba(0,0,0,.3);pointer-events:none;}",
       "#rlb-tip{position:fixed;z-index:2147483647;max-width:340px;background:#0f172a;color:#e2e8f0;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);pointer-events:none;display:none;}",
-      "#rlb-tip{position:fixed;z-index:2147483647;max-width:480px;background:#0f172a;color:#e2e8f0;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);pointer-events:none;display:none;}",
+      // Solid near-black tooltip: no borders, no header underline, full-brightness
+      // white text on every row (no dimming/opacity). Keeps the tabular columns.
+      "#rlb-tip{position:fixed;z-index:2147483647;max-width:480px;background:#0b0f19;color:#ffffff;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:none;display:none;}",
       "#rlb-tip .h{font-weight:700;margin-bottom:6px;color:#fff;}",
-      // Compact, borderless grid — only the header row gets a thin underline, so it
-      // reads as labels above a plain list rather than a bordered spreadsheet.
       "#rlb-tip table{width:100%;border-collapse:collapse;}",
-      "#rlb-tip td{padding:3px 8px 3px 0;white-space:nowrap;border:none;}",
+      "#rlb-tip td{padding:3px 8px 3px 0;white-space:nowrap;border:none;color:#ffffff;}",
       "#rlb-tip td:not(:first-child){text-align:right;}",
-      "#rlb-tip th{padding:0 8px 5px 0;white-space:nowrap;text-align:left;color:#94a3b8;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none;border-bottom:1px solid #334155;}",
+      "#rlb-tip th{padding:0 8px 5px 0;white-space:nowrap;text-align:left;color:#ffffff;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none;}",
       "#rlb-tip th:not(:first-child){text-align:right;}",
       "#rlb-tip tr.b td{color:#4ade80;font-weight:600;}",
       // Drivers whose match relies on the availability lead — the load picks up
