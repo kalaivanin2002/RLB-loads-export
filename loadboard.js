@@ -70,10 +70,12 @@
       "[data-rlb-match='strong']{outline-color:#16a34a!important;background:rgba(22,163,74,.08)!important;}",
       "[data-rlb-badge]::after{content:attr(data-rlb-badge);position:absolute;top:6px;left:6px;z-index:5;background:#f59e0b;color:#fff;font:600 11px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:3px 6px;border-radius:5px;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,.25);}",
       "[data-rlb-match='strong'][data-rlb-badge]::after{background:#16a34a;}",
-      // Red corner dot (top-right) on a load card when ANY of its drivers matches
-      // via the availability lead (pickup before their drop-off). Uses ::before so
-      // it doesn't collide with the ::after driver-count badge in the top-left.
-      "[data-rlb-lead]::before{content:'';position:absolute;top:8px;right:8px;z-index:6;width:11px;height:11px;border-radius:50%;background:#dc2626;box-shadow:0 0 0 3px rgba(220,38,38,.18),0 1px 2px rgba(0,0,0,.3);pointer-events:none;}",
+      // EARLY badge for loads with a driver matched via the availability lead
+      // (pickup before drop-off). Rendered via the card's ::before — NO DOM node is
+      // inserted into Relay's React tree — and positioned in JS (positionEarlyBadge)
+      // to sit on the status row, just right of the "Live" label (between Live and
+      // the Amount). Position is scroll-invariant (::before is absolute in the card).
+      "[data-rlb-lead]::before{content:'EARLY';position:absolute;left:var(--rlb-early-left,8px);top:var(--rlb-early-top,8px);z-index:6;background:#ef4444;color:#fff;font:700 9px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:3px 5px;border-radius:4px;letter-spacing:.04em;box-shadow:0 0 0 1px rgba(255,255,255,.2),0 1px 2px rgba(0,0,0,.4);pointer-events:none;white-space:nowrap;}",
       "#rlb-tip{position:fixed;z-index:2147483647;max-width:340px;background:#0f172a;color:#e2e8f0;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);pointer-events:none;display:none;}",
       // Solid near-black tooltip: no borders, no header underline, full-brightness
       // white text on every row (no dimming/opacity). Keeps the tabular columns.
@@ -88,8 +90,10 @@
       // Drivers whose match relies on the availability lead — the load picks up
       // BEFORE their drop-off/free time — are flagged red (see onEnter). Placed
       // after .b so the red warning wins when the best-fit driver is also early.
-      "#rlb-tip tr.lead td{color:#f87171;}",
-      "#rlb-tip .rlb-lead{display:inline-block;margin-left:6px;background:#dc2626;color:#fff;font:600 10px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:2px 5px;border-radius:4px;vertical-align:middle;text-transform:uppercase;letter-spacing:.03em;}",
+      // Bright reds + a faint row wash so the flag stays vivid on the near-black
+      // tooltip (dark reds like #dc2626 fade into the #0b0f19 background).
+      "#rlb-tip tr.lead td{color:#ff6b6b;background:rgba(239,68,68,.16);}",
+      "#rlb-tip .rlb-lead{display:inline-block;margin-left:6px;background:#ef4444;color:#fff;font:600 10px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:2px 5px;border-radius:4px;vertical-align:middle;text-transform:uppercase;letter-spacing:.03em;box-shadow:0 0 0 1px rgba(255,255,255,.18),0 1px 2px rgba(0,0,0,.4);}",
       // Hero launcher button (top-right, near the search).
       "#rlb-launch,#rlb-launch *{box-sizing:border-box;}",
       "#rlb-launch{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:rgb(0,104,141);color:#fff;border:none;border-radius:4px;padding:12px 20px;font:500 14px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:none;transition:background-color .15s ease;}",
@@ -1363,6 +1367,33 @@
     if (observer) observer.disconnect();
     try { doPaint(); } finally { if (observer && document.body) observer.observe(document.body, { childList: true, subtree: true }); }
   }
+  // Find the "Live" status label inside a card — a leaf element whose own text is
+  // exactly "Live". Used to anchor the EARLY badge on the same row, just after it.
+  function findLiveEl(card) {
+    var els = card.querySelectorAll("*");
+    for (var i = 0; i < els.length; i++) {
+      if ((els[i].textContent || "").replace(/\s+/g, " ").trim() === "Live") return els[i];
+    }
+    return null;
+  }
+  // Place the EARLY badge (the card's ::before) on the status row, immediately
+  // right of the "Live" label — i.e. between Live and the Amount. Computed from the
+  // live rects so it tracks the real layout; scroll-invariant (::before is absolute
+  // within the card). Falls back to bottom-right if "Live" isn't found.
+  function positionEarlyBadge(card) {
+    var cr = card.getBoundingClientRect();
+    var live = findLiveEl(card);
+    var left, top;
+    if (live) {
+      var lr = live.getBoundingClientRect();
+      left = (lr.right - cr.left) + 6;                 // just right of "Live"
+      top = (lr.top - cr.top) + (lr.height - 14) / 2;  // center on the row
+    } else {
+      left = cr.width - 64; top = cr.height - 22;      // fallback: bottom-right
+    }
+    card.style.setProperty("--rlb-early-left", left + "px");
+    card.style.setProperty("--rlb-early-top", top + "px");
+  }
   function doPaint() {
     if (!onLoadboard()) return; // injected on all Relay pages; only act on the board
     ensurePanel();
@@ -1392,9 +1423,10 @@
       matched++;
       target.setAttribute("data-rlb-match", info.bestScore >= 0.85 ? "strong" : "weak");
       target.setAttribute("data-rlb-badge", "▲ " + info.driverCount + (info.driverCount === 1 ? " driver" : " drivers"));
-      // Red corner dot when ≥1 driver matches via the lead (pickup before drop-off).
+      // EARLY badge when ≥1 driver matches via the lead (pickup before drop-off).
       if ((info.suitableDrivers || []).some(function (d) { return driverUsesLead(info, d); })) {
         target.setAttribute("data-rlb-lead", "1");
+        positionEarlyBadge(target); // place on the status row, just right of "Live"
       }
       target.__rlbInfo = info;
       if (!target.__rlbBound) {
