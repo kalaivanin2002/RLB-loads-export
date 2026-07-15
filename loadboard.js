@@ -20,6 +20,19 @@
   var observer = null;
   var scheduled = false;
 
+  // ── manual auto-refresh state ────────────────────────────────────────────────
+  // Our own timed refresh: we click Relay's manual refresh control on a repeating
+  // timer, each interval a random value in [arMin, arMax] seconds. Relay's OWN
+  // auto-refresh stays off (ensureAutoRefreshOff) — this replaces it on our clock.
+  // Config lives in the popup's Developer settings and is read from storage here;
+  // a storage.onChanged listener starts/stops the timer live without a reload.
+  var AR_MIN_S = 3, AR_MAX_S = 30;         // valid interval bounds (seconds)
+  var arEnabled = false;                    // is our auto-refresh running?
+  var arMin = 6, arMax = 9;                 // chosen interval bounds (seconds)
+  var arTimer = null;                       // setTimeout handle for the next refresh
+  var arRescoreTimer = null;                // follow-up timer that re-scores after a refresh
+  var lastScoredSearchAt = 0;               // lastSearchAt we last handed to scoreAndPaint
+
   var esc = function (s) {
     return s == null ? "" : String(s).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -1365,6 +1378,150 @@
     }
   }
 
+  // ── manual auto-refresh (our own timer) ──────────────────────────────────────
+  // Relay's native auto-refresh stays off; instead WE click Relay's manual
+  // "refresh" control on a repeating timer, each cycle waiting a random number of
+  // seconds in [arMin, arMax]. Clicking Relay's own control re-runs its real
+  // search, whose response flows back through hook.js → gets re-scored and
+  // re-painted automatically (same pipeline as pagination/live search).
+
+  // Locate Relay's manual refresh control. It's ICON-ONLY (an <svg aria-hidden>
+  // inside a <button> with no text/aria-label), so text matching can't find it.
+  // Its stable landmark is the ".refresh-and-chat-box" wrapper inside #utility-bar,
+  // which holds the "Turn on auto-refresh" label + the refresh button (+ chat).
+  // We target the refresh button structurally, and never the auto-refresh toggle.
+  function findRelayRefreshControl() {
+    var norm = function (s) { return (s || "").replace(/\s+/g, " ").trim().toLowerCase(); };
+    var bar = document.getElementById("utility-bar") || document;
+    var box = (bar.querySelector && bar.querySelector(".refresh-and-chat-box")) ||
+              document.querySelector(".refresh-and-chat-box") || bar;
+
+    // The native auto-refresh control is the switch (or the <p>"…auto-refresh"</p>'s
+    // associated control) — exclude anything tied to it.
+    var autoSwitch = box.querySelector && box.querySelector('input[role="switch"], [role="switch"]');
+
+    var buttons = [].slice.call(box.querySelectorAll ? box.querySelectorAll('button, [role="button"]') : []);
+    var refreshBtn = null;
+    for (var i = 0; i < buttons.length; i++) {
+      var el = buttons[i];
+      if (autoSwitch && (el === autoSwitch || el.contains(autoSwitch) || (autoSwitch.contains && autoSwitch.contains(el)))) continue;
+      var label = norm((el.getAttribute && (el.getAttribute("aria-label") || el.getAttribute("title"))) || el.textContent);
+      // Skip the auto-refresh toggle and the chat button — leave only refresh.
+      if (/auto[\s-]?refresh/.test(label)) continue;
+      if (/chat|message|help|support/.test(label)) continue;
+      // First non-excluded button in this box is the refresh control. Prefer one
+      // whose label/testid explicitly says refresh/reload if present, else take it.
+      if (/refresh|reload/.test(label) || /refresh|reload/.test(norm(el.getAttribute && el.getAttribute("data-testid")))) {
+        return el;
+      }
+      if (!refreshBtn) refreshBtn = el; // icon-only fallback (no label at all)
+    }
+    return refreshBtn;
+  }
+
+  // Fire one refresh: click Relay's control if found. Returns true if it clicked.
+  // Clicking refresh re-runs Relay's own /loadboard/search; hook.js intercepts the
+  // response and bridge.js buffers it into lastSearchLoads/lastSearchAt. But that
+  // buffered search is NOT guaranteed to reach our RLB_SEARCH message listener on a
+  // manual refresh, so new loads would never get scored/highlighted. To close that
+  // gap we schedule an explicit re-score: after a short delay (for Relay to
+  // fetch+render), read the freshest buffered search and run it through the SAME
+  // scoreAndPaint path the launcher uses — so newly-arrived loads that match a
+  // driver get highlighted just like on the initial search.
+  function doAutoRefresh() {
+    if (!onLoadboard()) return false;
+    var ctrl = findRelayRefreshControl();
+    if (!ctrl) return false;
+    try { ctrl.click(); }
+    catch (e) { logError("autoRefreshClick", e); return false; }
+    scheduleRescoreAfterRefresh();
+    return true;
+  }
+
+  // After a refresh, re-score the newest intercepted search so new matching loads
+  // highlight. Only scores a buffer NEWER than the one we last scored, so we don't
+  // redundantly re-score stale results.
+  function scheduleRescoreAfterRefresh() {
+    if (arRescoreTimer) { clearTimeout(arRescoreTimer); arRescoreTimer = null; }
+    arRescoreTimer = setTimeout(function () {
+      arRescoreTimer = null;
+      if (!arEnabled || !onLoadboard()) return;
+      try {
+        chrome.storage.local.get(["lastSearchLoads", "lastSearchAt"], function (r) {
+          var at = r.lastSearchAt || 0;
+          if (at && at > lastScoredSearchAt && Array.isArray(r.lastSearchLoads) && r.lastSearchLoads.length) {
+            lastScoredSearchAt = at;
+            console.log("[RLB board] auto-refresh re-score:", r.lastSearchLoads.length, "loads");
+            scoreAndPaint(r.lastSearchLoads);
+          }
+        });
+      } catch (e) { /* context invalidated */ }
+    }, 2000); // ~1.5s: enough for Relay to return + render the refreshed search
+  }
+
+  var arRand = function (lo, hi) { return lo + Math.random() * (hi - lo); };
+
+  function clearAutoRefreshTimer() {
+    if (arTimer) { clearTimeout(arTimer); arTimer = null; }
+    if (arRescoreTimer) { clearTimeout(arRescoreTimer); arRescoreTimer = null; }
+  }
+
+  // Min ≤ Max is required; refuse to run while the range is invalid.
+  function autoRefreshRangeValid() { return arMin <= arMax; }
+
+  // Schedule the next refresh at a random point in [arMin, arMax] seconds.
+  function scheduleNextRefresh() {
+    if (!arEnabled) return;
+    var lo = Math.min(arMin, arMax), hi = Math.max(arMin, arMax);
+    var waitMs = Math.round(arRand(lo, hi) * 1000);
+    arTimer = setTimeout(function () {
+      arTimer = null;
+      doAutoRefresh();
+      scheduleNextRefresh(); // pick a fresh random interval each cycle
+    }, waitMs);
+  }
+
+  function startAutoRefresh() {
+    clearAutoRefreshTimer();
+    if (!arEnabled || !autoRefreshRangeValid()) return;
+    scheduleNextRefresh();
+  }
+
+  function stopAutoRefresh() {
+    clearAutoRefreshTimer();
+  }
+
+  // Apply auto-refresh config (from storage): clamp, validate, and (re)start/stop.
+  function applyAutoRefreshConfig(r) {
+    if (typeof r.arMin === "number") arMin = Math.min(Math.max(r.arMin, AR_MIN_S), AR_MAX_S);
+    if (typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
+    arEnabled = !!r.arEnabled && autoRefreshRangeValid();
+    if (arEnabled) startAutoRefresh(); else stopAutoRefresh();
+  }
+
+  // Read the popup-managed config from storage on boot, then start if enabled.
+  function loadAutoRefreshPrefs() {
+    try {
+      chrome.storage.local.get(["arEnabled", "arMin", "arMax"], function (r) {
+        applyAutoRefreshConfig(r || {});
+      });
+    } catch (e) { /* context invalidated */ }
+  }
+
+  // React live to popup changes: when the user saves new auto-refresh settings,
+  // start/stop/retime the running board without needing a page reload.
+  try {
+    chrome.storage.onChanged.addListener(function (changes, area) {
+      if (area !== "local") return;
+      if (!("arEnabled" in changes || "arMin" in changes || "arMax" in changes)) return;
+      applyAutoRefreshConfig({
+        arEnabled: "arEnabled" in changes ? changes.arEnabled.newValue : arEnabled,
+        arMin: "arMin" in changes ? changes.arMin.newValue : arMin,
+        arMax: "arMax" in changes ? changes.arMax.newValue : arMax,
+      });
+    });
+  } catch (e) { /* context invalidated */ }
+
   // ── hover tooltip ───────────────────────────────────────────────────────────────
   function ensureTip() {
     if (tip) return tip;
@@ -1415,6 +1572,7 @@
     injectStyles();
     ensurePanel();
     loadOnlyMinePref();
+    loadAutoRefreshPrefs();
     loadDriverCount();
     replayBufferedSearch();
     observer = new MutationObserver(schedulePaint);
@@ -1427,6 +1585,9 @@
     var d = event.data;
     if (d && d.source === "RLB_SEARCH" && Array.isArray(d.loads)) {
       console.log("[RLB board] live search received:", d.loads.length, "loads");
+      // Mark this search as scored so the auto-refresh follow-up doesn't re-score
+      // the same buffer (bridge.js writes lastSearchAt for this same RLB_SEARCH).
+      lastScoredSearchAt = Date.now();
       scoreAndPaint(d.loads);
     }
   });
