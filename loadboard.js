@@ -14,10 +14,24 @@
   var lastLoads = null; // last slim loads seen from the page (for re-scoring after a driver refresh)
   var driverCount = 0;
   var driverAt = null;
+  var onlyMyDrivers = false; // "only my driver locations" filter — hide unmatched load cards
   var lastDriverError = null; // set by refreshDriversAsync on failure, shown in the "No drivers found" card
   var tip = null;
   var observer = null;
   var scheduled = false;
+
+  // ── manual auto-refresh state ────────────────────────────────────────────────
+  // Our own timed refresh: we click Relay's manual refresh control on a repeating
+  // timer, each interval a random value in [arMin, arMax] seconds. Relay's OWN
+  // auto-refresh stays off (ensureAutoRefreshOff) — this replaces it on our clock.
+  // Config lives in the popup's Developer settings and is read from storage here;
+  // a storage.onChanged listener starts/stops the timer live without a reload.
+  var AR_MIN_S = 3, AR_MAX_S = 30;         // valid interval bounds (seconds)
+  var arEnabled = false;                    // is our auto-refresh running?
+  var arMin = 6, arMax = 9;                 // chosen interval bounds (seconds)
+  var arTimer = null;                       // setTimeout handle for the next refresh
+  var arRescoreTimer = null;                // follow-up timer that re-scores after a refresh
+  var lastScoredSearchAt = 0;               // lastSearchAt we last handed to scoreAndPaint
 
   var esc = function (s) {
     return s == null ? "" : String(s).replace(/[&<>"']/g, function (c) {
@@ -77,6 +91,24 @@
       "#rlb-launch-unassigned:disabled{cursor:default;}",
       "#rlb-launch-unassigned .bolt{font-size:16px;}",
       "#rlb-launch-unassigned.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
+      // "Only my driver locations" filter chip — a slider-style toggle + label.
+      "#rlb-only-mine,#rlb-only-mine *{box-sizing:border-box;}",
+      "#rlb-only-mine{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);cursor:pointer;user-select:none;}",
+      // Toggle switch: the real checkbox is transparent on top; the slider draws the UI.
+      "#rlb-only-mine .rlb-switch{position:relative;display:inline-block;width:34px;height:18px;flex:none;}",
+      "#rlb-only-mine .rlb-switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;}",
+      "#rlb-only-mine .rlb-slider{position:absolute;inset:0;background:#cbd5e1;border-radius:999px;transition:background .15s ease;}",
+      "#rlb-only-mine .rlb-slider::before{content:\"\";position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s ease;}",
+      "#rlb-only-mine .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
+      "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
+      // Hide non-matching load cards when the filter is on (data-attr = React-safe,
+      // same approach as the highlight outline — we never touch Relay's child nodes).
+      "[data-rlb-hidden]{display:none!important;}",
+      // When the filter is on, the only visible cards are matches — so the outline,
+      // tint and badge are redundant. Suppress them (data-rlb-match stays on the node
+      // for counting / step-through; only its visual styling is neutralised here).
+      "html[data-rlb-filter] [data-rlb-match]{outline:none!important;background:transparent!important;}",
+      "html[data-rlb-filter] [data-rlb-badge]::after{display:none!important;}",
       // Progress / result card.
       "#rlb-card,#rlb-card *{box-sizing:border-box;}",
       "#rlb-card{position:fixed;top:122px;right:22px;width:340px;max-width:92vw;z-index:2147483000;background:#fff;border:1px solid #e5e9f0;border-radius:14px;box-shadow:0 14px 44px rgba(15,23,42,.24);font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;overflow:hidden;display:none;}",
@@ -169,6 +201,23 @@
       }
     });
 
+    // "Only my driver locations" filter — when checked, hide every load card that
+    // isn't matched to one of your drivers. Reflects the persisted `onlyMyDrivers`
+    // JS state (which survives SPA navigation) so it stays in sync if the panel is
+    // rebuilt after a route change.
+    var only = document.createElement("label");
+    only.id = "rlb-only-mine";
+    only.title = "Hide loads that don't match any of your drivers.";
+    only.innerHTML = '<span class="rlb-switch"><input id="rlb-only-mine-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Only my driver locations</span>';
+    document.body.appendChild(only);
+    var onlyCb = only.querySelector("#rlb-only-mine-cb");
+    onlyCb.checked = onlyMyDrivers;
+    onlyCb.addEventListener("change", function () {
+      onlyMyDrivers = onlyCb.checked;
+      try { chrome.storage.local.set({ onlyMyDrivers: onlyMyDrivers }); } catch (e) { /* context invalidated */ }
+      schedulePaint();
+    });
+
     var card = document.createElement("div");
     card.id = "rlb-card";
     card.innerHTML =
@@ -203,6 +252,37 @@
       var br = b.getBoundingClientRect();
       bf.style.top = b.style.top;
       bf.style.right = Math.max(12, window.innerWidth - br.left + 10) + "px";
+    }
+    // The filter chip sits INLINE on the search panel's fields row, in the empty gap
+    // to the right of the "Search loads" button (before "Saved searches"), vertically
+    // centred on the inputs. We can't inject into the React panel, so we overlay a
+    // fixed element aligned to the fields' boxes. Fall back to below-Origin, then to
+    // the panel's bottom-left, if those anchors aren't found.
+    var only = document.getElementById("rlb-only-mine");
+    if (only) {
+      only.style.right = "auto";
+      var originEl = document.getElementById("rlb-origin-city-filter");
+      var oref = originEl && originEl.getBoundingClientRect();
+      // "Search loads" has no stable id — find it by its label text within the panel.
+      var searchBtn = null, panelEl = anchor.closest ? (anchor.closest(".search__panel") || anchor) : anchor;
+      var btns = (panelEl || document).querySelectorAll("button");
+      for (var bi = 0; bi < btns.length; bi++) {
+        if ((btns[bi].textContent || "").trim().toLowerCase() === "search loads") { searchBtn = btns[bi]; break; }
+      }
+      var sref = searchBtn && searchBtn.getBoundingClientRect();
+      var eqEl = document.getElementById("equipment-trailer-filter");
+      var eref = eqEl && eqEl.getBoundingClientRect();
+      var anchorRight = (sref && sref.width) ? sref.right : ((eref && eref.width) ? eref.right : null);
+      if (anchorRight != null && oref && oref.width) {
+        only.style.left = (anchorRight + 16) + "px";
+        only.style.top = (oref.top + (oref.height - only.offsetHeight) / 2) + "px";
+      } else if (oref && oref.width) {
+        only.style.left = Math.max(8, oref.left) + "px";
+        only.style.top = (oref.bottom + 8) + "px";
+      } else {
+        only.style.left = Math.max(8, r.left + 12) + "px";
+        only.style.top = Math.max(8, r.bottom - only.offsetHeight - 12) + "px";
+      }
     }
   }
 
@@ -263,6 +343,19 @@
   function updatePanel() {
     setPanel("rlb-drv", String(driverCount || 0));
     if (!driverCount) setPanel("rlb-msg", "Click Refresh drivers to load availability.");
+  }
+
+  // Restore the persisted "only my driver locations" filter state, sync the
+  // checkbox, and repaint so the filter takes effect on the current board.
+  function loadOnlyMinePref() {
+    try {
+      chrome.storage.local.get(["onlyMyDrivers"], function (r) {
+        onlyMyDrivers = !!r.onlyMyDrivers;
+        var cb = document.getElementById("rlb-only-mine-cb");
+        if (cb) cb.checked = onlyMyDrivers;
+        schedulePaint();
+      });
+    } catch (e) { /* context invalidated */ }
   }
 
   // ── driver availability ───────────────────────────────────────────────────────
@@ -1220,6 +1313,9 @@
       m[j].removeAttribute("data-rlb-badge");
       m[j].__rlbInfo = null;
     }
+    // Reveal anything the "only my drivers" filter hid — doPaint re-hides as needed.
+    var h = document.querySelectorAll("[data-rlb-hidden]");
+    for (var k = 0; k < h.length; k++) h[k].removeAttribute("data-rlb-hidden");
   }
   function schedulePaint() {
     if (scheduled) return;
@@ -1238,12 +1334,24 @@
     var rows = loadRows();
     setPanel("rlb-rows", String(rows.length));
     clearPaint();
+    // Only hide non-matching cards once we actually have scored loads — otherwise
+    // (e.g. before the first search is scored) the whole board would blank out.
+    var haveScores = false;
+    for (var k in latest) { if (Object.prototype.hasOwnProperty.call(latest, k)) { haveScores = true; break; } }
+    var hideOthers = onlyMyDrivers && haveScores;
+    // Filter on → drop the highlight styling (outline/tint/badge) via CSS; see the
+    // "html[data-rlb-filter]" rules. The match attributes themselves stay for counting.
+    if (onlyMyDrivers) document.documentElement.setAttribute("data-rlb-filter", "1");
+    else document.documentElement.removeAttribute("data-rlb-filter");
     var matched = 0;
     for (var i = 0; i < rows.length; i++) {
       var el = rows[i].el;
       var info = latest[rows[i].id];
-      if (!info) continue;
       var target = (el.closest && el.closest(".load-card")) || el;
+      if (!info) {
+        if (hideOthers) target.setAttribute("data-rlb-hidden", "1");
+        continue;
+      }
       matched++;
       target.setAttribute("data-rlb-match", info.bestScore >= 0.85 ? "strong" : "weak");
       target.setAttribute("data-rlb-badge", "▲ " + info.driverCount + (info.driverCount === 1 ? " driver" : " drivers"));
@@ -1269,6 +1377,150 @@
       setPanel("rlb-ar", "auto-refresh off");
     }
   }
+
+  // ── manual auto-refresh (our own timer) ──────────────────────────────────────
+  // Relay's native auto-refresh stays off; instead WE click Relay's manual
+  // "refresh" control on a repeating timer, each cycle waiting a random number of
+  // seconds in [arMin, arMax]. Clicking Relay's own control re-runs its real
+  // search, whose response flows back through hook.js → gets re-scored and
+  // re-painted automatically (same pipeline as pagination/live search).
+
+  // Locate Relay's manual refresh control. It's ICON-ONLY (an <svg aria-hidden>
+  // inside a <button> with no text/aria-label), so text matching can't find it.
+  // Its stable landmark is the ".refresh-and-chat-box" wrapper inside #utility-bar,
+  // which holds the "Turn on auto-refresh" label + the refresh button (+ chat).
+  // We target the refresh button structurally, and never the auto-refresh toggle.
+  function findRelayRefreshControl() {
+    var norm = function (s) { return (s || "").replace(/\s+/g, " ").trim().toLowerCase(); };
+    var bar = document.getElementById("utility-bar") || document;
+    var box = (bar.querySelector && bar.querySelector(".refresh-and-chat-box")) ||
+              document.querySelector(".refresh-and-chat-box") || bar;
+
+    // The native auto-refresh control is the switch (or the <p>"…auto-refresh"</p>'s
+    // associated control) — exclude anything tied to it.
+    var autoSwitch = box.querySelector && box.querySelector('input[role="switch"], [role="switch"]');
+
+    var buttons = [].slice.call(box.querySelectorAll ? box.querySelectorAll('button, [role="button"]') : []);
+    var refreshBtn = null;
+    for (var i = 0; i < buttons.length; i++) {
+      var el = buttons[i];
+      if (autoSwitch && (el === autoSwitch || el.contains(autoSwitch) || (autoSwitch.contains && autoSwitch.contains(el)))) continue;
+      var label = norm((el.getAttribute && (el.getAttribute("aria-label") || el.getAttribute("title"))) || el.textContent);
+      // Skip the auto-refresh toggle and the chat button — leave only refresh.
+      if (/auto[\s-]?refresh/.test(label)) continue;
+      if (/chat|message|help|support/.test(label)) continue;
+      // First non-excluded button in this box is the refresh control. Prefer one
+      // whose label/testid explicitly says refresh/reload if present, else take it.
+      if (/refresh|reload/.test(label) || /refresh|reload/.test(norm(el.getAttribute && el.getAttribute("data-testid")))) {
+        return el;
+      }
+      if (!refreshBtn) refreshBtn = el; // icon-only fallback (no label at all)
+    }
+    return refreshBtn;
+  }
+
+  // Fire one refresh: click Relay's control if found. Returns true if it clicked.
+  // Clicking refresh re-runs Relay's own /loadboard/search; hook.js intercepts the
+  // response and bridge.js buffers it into lastSearchLoads/lastSearchAt. But that
+  // buffered search is NOT guaranteed to reach our RLB_SEARCH message listener on a
+  // manual refresh, so new loads would never get scored/highlighted. To close that
+  // gap we schedule an explicit re-score: after a short delay (for Relay to
+  // fetch+render), read the freshest buffered search and run it through the SAME
+  // scoreAndPaint path the launcher uses — so newly-arrived loads that match a
+  // driver get highlighted just like on the initial search.
+  function doAutoRefresh() {
+    if (!onLoadboard()) return false;
+    var ctrl = findRelayRefreshControl();
+    if (!ctrl) return false;
+    try { ctrl.click(); }
+    catch (e) { logError("autoRefreshClick", e); return false; }
+    scheduleRescoreAfterRefresh();
+    return true;
+  }
+
+  // After a refresh, re-score the newest intercepted search so new matching loads
+  // highlight. Only scores a buffer NEWER than the one we last scored, so we don't
+  // redundantly re-score stale results.
+  function scheduleRescoreAfterRefresh() {
+    if (arRescoreTimer) { clearTimeout(arRescoreTimer); arRescoreTimer = null; }
+    arRescoreTimer = setTimeout(function () {
+      arRescoreTimer = null;
+      if (!arEnabled || !onLoadboard()) return;
+      try {
+        chrome.storage.local.get(["lastSearchLoads", "lastSearchAt"], function (r) {
+          var at = r.lastSearchAt || 0;
+          if (at && at > lastScoredSearchAt && Array.isArray(r.lastSearchLoads) && r.lastSearchLoads.length) {
+            lastScoredSearchAt = at;
+            console.log("[RLB board] auto-refresh re-score:", r.lastSearchLoads.length, "loads");
+            scoreAndPaint(r.lastSearchLoads);
+          }
+        });
+      } catch (e) { /* context invalidated */ }
+    }, 2000); // ~1.5s: enough for Relay to return + render the refreshed search
+  }
+
+  var arRand = function (lo, hi) { return lo + Math.random() * (hi - lo); };
+
+  function clearAutoRefreshTimer() {
+    if (arTimer) { clearTimeout(arTimer); arTimer = null; }
+    if (arRescoreTimer) { clearTimeout(arRescoreTimer); arRescoreTimer = null; }
+  }
+
+  // Min ≤ Max is required; refuse to run while the range is invalid.
+  function autoRefreshRangeValid() { return arMin <= arMax; }
+
+  // Schedule the next refresh at a random point in [arMin, arMax] seconds.
+  function scheduleNextRefresh() {
+    if (!arEnabled) return;
+    var lo = Math.min(arMin, arMax), hi = Math.max(arMin, arMax);
+    var waitMs = Math.round(arRand(lo, hi) * 1000);
+    arTimer = setTimeout(function () {
+      arTimer = null;
+      doAutoRefresh();
+      scheduleNextRefresh(); // pick a fresh random interval each cycle
+    }, waitMs);
+  }
+
+  function startAutoRefresh() {
+    clearAutoRefreshTimer();
+    if (!arEnabled || !autoRefreshRangeValid()) return;
+    scheduleNextRefresh();
+  }
+
+  function stopAutoRefresh() {
+    clearAutoRefreshTimer();
+  }
+
+  // Apply auto-refresh config (from storage): clamp, validate, and (re)start/stop.
+  function applyAutoRefreshConfig(r) {
+    if (typeof r.arMin === "number") arMin = Math.min(Math.max(r.arMin, AR_MIN_S), AR_MAX_S);
+    if (typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
+    arEnabled = !!r.arEnabled && autoRefreshRangeValid();
+    if (arEnabled) startAutoRefresh(); else stopAutoRefresh();
+  }
+
+  // Read the popup-managed config from storage on boot, then start if enabled.
+  function loadAutoRefreshPrefs() {
+    try {
+      chrome.storage.local.get(["arEnabled", "arMin", "arMax"], function (r) {
+        applyAutoRefreshConfig(r || {});
+      });
+    } catch (e) { /* context invalidated */ }
+  }
+
+  // React live to popup changes: when the user saves new auto-refresh settings,
+  // start/stop/retime the running board without needing a page reload.
+  try {
+    chrome.storage.onChanged.addListener(function (changes, area) {
+      if (area !== "local") return;
+      if (!("arEnabled" in changes || "arMin" in changes || "arMax" in changes)) return;
+      applyAutoRefreshConfig({
+        arEnabled: "arEnabled" in changes ? changes.arEnabled.newValue : arEnabled,
+        arMin: "arMin" in changes ? changes.arMin.newValue : arMin,
+        arMax: "arMax" in changes ? changes.arMax.newValue : arMax,
+      });
+    });
+  } catch (e) { /* context invalidated */ }
 
   // ── hover tooltip ───────────────────────────────────────────────────────────────
   function ensureTip() {
@@ -1319,6 +1571,8 @@
   function boot() {
     injectStyles();
     ensurePanel();
+    loadOnlyMinePref();
+    loadAutoRefreshPrefs();
     loadDriverCount();
     replayBufferedSearch();
     observer = new MutationObserver(schedulePaint);
@@ -1331,6 +1585,9 @@
     var d = event.data;
     if (d && d.source === "RLB_SEARCH" && Array.isArray(d.loads)) {
       console.log("[RLB board] live search received:", d.loads.length, "loads");
+      // Mark this search as scored so the auto-refresh follow-up doesn't re-score
+      // the same buffer (bridge.js writes lastSearchAt for this same RLB_SEARCH).
+      lastScoredSearchAt = Date.now();
       scoreAndPaint(d.loads);
     }
   });
