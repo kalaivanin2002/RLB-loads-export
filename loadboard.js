@@ -79,15 +79,15 @@
       "#rlb-tip{position:fixed;z-index:2147483647;max-width:340px;background:#0f172a;color:#e2e8f0;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);pointer-events:none;display:none;}",
       // Solid near-black tooltip: no borders, no header underline, full-brightness
       // white text on every row (no dimming/opacity). Keeps the tabular columns.
-      "#rlb-tip{position:fixed;z-index:2147483647;max-width:360px;background:#0b0f19;color:#ffffff;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:none;display:none;}",
-      "#rlb-tip .h{font-weight:700;margin-bottom:6px;color:#fff;}",
+      "#rlb-tip{position:fixed;z-index:2147483647;max-width:360px;background:#0b0f19;color:#ffffff;font:12px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:none;display:none;}",
+      "#rlb-tip .h{font-weight:700;margin-bottom:4px;color:#fff;}",
       "#rlb-tip table{width:100%;border-collapse:collapse;}",
-      "#rlb-tip td{padding:3px 8px 3px 0;white-space:nowrap;border:none;color:#ffffff;}",
-      // Driver names may wrap so a long name can't blow the tooltip out wide
-      // (the number columns stay on one line). Keeps the tooltip narrow.
-      "#rlb-tip td:first-child{white-space:normal;}",
+      "#rlb-tip td{padding:2px 8px 2px 0;white-space:nowrap;border:none;color:#ffffff;}",
+      // Driver name truncates (single line + ellipsis) so a long name keeps the row a
+      // uniform height and the tooltip narrow; full name still shows on hover.
+      "#rlb-tip .rlb-dname{display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;}",
       "#rlb-tip td:not(:first-child){text-align:right;}",
-      "#rlb-tip th{padding:0 8px 5px 0;white-space:nowrap;text-align:left;color:#ffffff;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none;}",
+      "#rlb-tip th{padding:0 8px 3px 0;white-space:nowrap;text-align:left;color:#ffffff;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none;}",
       "#rlb-tip th:not(:first-child){text-align:right;}",
       "#rlb-tip tr.b td{color:#4ade80;font-weight:600;}",
       // Drivers whose match relies on the availability lead — the load picks up
@@ -1632,7 +1632,7 @@
         ? ' <span class="rlb-lead" title="Pickup is before this driver’s drop-off time — matches only via the availability lead.">early</span>'
         : "";
       return (
-        '<tr class="' + cls + '"><td>' + esc(name) + label + "</td><td>" +
+        '<tr class="' + cls + '"><td><span class="rlb-dname" title="' + esc(name) + '">' + esc(name) + "</span>" + label + "</td><td>" +
         n1(d.deadheadMiles) + "mi</td><td>" + (d.returnMiles == null ? "—" : n1(d.returnMiles) + "mi") + "</td><td>" +
         n1(d.pickupGapHours) + "h</td><td>" + n1(d.fitScore != null ? d.fitScore * 100 : null) + "</td></tr>"
       );
