@@ -1024,9 +1024,20 @@
         var cities = buildCityList(list);
         if (!cities.length) { cardError("No drivers to search from.", "None of your drivers had a usable drop-off location (Advanced → View drivers)."); return null; }
 
-        batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
-        roundIdx = 0;
-        return runAllRounds(steps, cities);
+        return new Promise(function (resolve, reject) {
+          chrome.storage.local.get(["organisationLocations"], function (r) {
+            var orgLocs = (r && r.organisationLocations) || [];
+            var orgBatch = orgLocs
+              .map(function (o) { return { city: o.cityName || o.name, country: o.country || null }; })
+              .filter(function (o) { return !!o.city; });
+            // Company locations go first; driver drop-off cities are the fallback rounds.
+            var driverBatches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
+            batches = orgBatch.length ? [orgBatch].concat(driverBatches) : driverBatches;
+            var allCities = orgBatch.length ? orgBatch.concat(cities) : cities;
+            roundIdx = 0;
+            runAllRounds(steps, allCities).then(resolve, reject);
+          });
+        });
       });
     }).catch(function (e) {
       logError("runAutopilot", e);
@@ -1064,9 +1075,20 @@
         var cities = buildCityList(list);
         if (!cities.length) { cardError("No unassigned drivers to search from.", "None of the unassigned drivers had a resolvable domicile city."); return null; }
 
-        batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
-        roundIdx = 0;
-        return runAllRounds(steps, cities);
+        return new Promise(function (resolve, reject) {
+          chrome.storage.local.get(["organisationLocations"], function (r) {
+            var orgLocs = (r && r.organisationLocations) || [];
+            var orgBatch = orgLocs
+              .map(function (o) { return { city: o.cityName || o.name, country: o.country || null }; })
+              .filter(function (o) { return !!o.city; });
+            // Company locations go first; driver domicile cities are the fallback rounds.
+            var driverBatches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
+            batches = orgBatch.length ? [orgBatch].concat(driverBatches) : driverBatches;
+            var allCities = orgBatch.length ? orgBatch.concat(cities) : cities;
+            roundIdx = 0;
+            runAllRounds(steps, allCities).then(resolve, reject);
+          });
+        });
       });
     }).catch(function (e) {
       logError("runUnassignedDriversAutopilot", e);

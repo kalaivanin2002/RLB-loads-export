@@ -26,7 +26,7 @@ const DEFAULTS = {
   letters: "abcdefghijklmnopqrstuvwxyz",
   prefix: ", ",
   delayMs: 500,
-  searchRadius: 50,
+  searchRadius: 250,
   nearbyRadius: 10,
   resultSize: 50,
   maxLocations: 2,
@@ -517,7 +517,7 @@ function buildSearchPayload(loc, cfg, dateWindow) {
   const displayValue =
     (loc.displayValue != null ? loc.displayValue : loc.display_value) ||
     (name + (stateCode ? ", " + stateCode : ""));
-  const radius = Number(cfg.searchRadius) || 5;
+  const radius = loc.radius != null ? Number(loc.radius) : (Number(cfg.searchRadius) || 5);
 
   return {
     workOpportunityTypeList: ["ROUND_TRIP", "ONE_WAY"],
@@ -542,7 +542,7 @@ function buildSearchPayload(loc, cfg, dateWindow) {
     startCityLongitude: null,
     startCityDisplayValue: null,
     isOriginCityLive: null,
-    startCityRadius: 50,
+    startCityRadius: loc.radius != null ? Number(loc.radius) : 250,
     destinationCity: null,
     originCitiesRadiusFilters: [
       {
@@ -919,12 +919,17 @@ async function startJob(locations) {
     await logError("background/startJob/disableAutoRefresh", e);
   }
 
+  // Get company locations to search first
+  await log("loads", "Fetching company locations…");
+  const orgLocs = await getCompanyLocations(cfg, tab.id);
+  const combined = orgLocs.concat(locations);
+
   await chrome.storage.local.set({
-    loadsJobLocations: locations,
+    loadsJobLocations: combined,
     loadsJobState: {
       status: "running",
       cursor: 0,
-      total: locations.length,
+      total: combined.length,
       processed: 0,
       errors: 0,
       csrf: csrf,
@@ -938,7 +943,7 @@ async function startJob(locations) {
   ensureWatchdog();
   await setRunning("loads", true);
   stopRequested = false;
-  await log("loads", "Queued " + locations.length + " locations. Pacing ~" + (Number(cfg.delayMs) || 300) + "ms + jitter.");
+  await log("loads", "Queued " + combined.length + " locations (incl. " + orgLocs.length + " company locations). Pacing ~" + (Number(cfg.delayMs) || 300) + "ms + jitter.");
   processLoop();
 }
 
@@ -1086,7 +1091,12 @@ async function processLoop() {
           await appendResult({ location: loc, capturedAt: new Date().toISOString(), count: n, response: data });
         }
 
-        state.cursor = i + 1;
+        if (loc.isOrg && n > 0) {
+          await log("loads", "Primary search at company location " + label + " found " + n + " loads. Skipping fallback locations.", "success");
+          state.cursor = state.total; // Skip fallback
+        } else {
+          state.cursor = i + 1;
+        }
         state.processed = state.processed + 1;
         state.updatedAt = Date.now();
         await chrome.storage.local.set({ loadsJobState: state });
@@ -1671,7 +1681,6 @@ async function runPlanner() {
       );
     }
 
-    const base = Math.max(0, Number(cfg.delayMs) || 300);
     const results = [];
     let withRec = 0;
 
@@ -1713,38 +1722,58 @@ async function runPlanner() {
         continue;
       }
 
-      try {
-        const loc = {
-          name: fl.city,
-          stateCode: "UK",
-          country: "EU",
-          latitude: fl.latitude,
-          longitude: fl.longitude,
-          displayValue: fl.city + ", UK",
-        };
-        // Search the full board (no date restriction) so near-term loads always
-        // show; our own feasibility filter picks what fits each driver's window.
-        const payload = buildSearchPayload(loc, cfg);
-        const resp = await withRetry(() => searchLoadsInPage(tab.id, cfg, payload, csrf), "search", a.driver.name, 3);
-        const plan = planLoadsForDriver(a, resp, cfg);
+      // Try matching against the company loads first
+      let plan = null;
+      if (companyLoads.length > 0) {
+        plan = planLoadsForDriver(a, { workOpportunities: companyLoads }, cfg);
+      }
+
+      if (plan && plan.feasibleCount > 0) {
         results.push(Object.assign(baseRec, plan));
         if (plan.recommended) withRec++;
         await log(
           "planner",
-          i + 1 + "/" + availability.length + " " + a.driver.name + " @ " + fl.city + ": " +
+          i + 1 + "/" + availability.length + " " + a.driver.name + " @ " + fl.city + " (matched Company Loads): " +
             plan.feasibleCount + " feasible / " + plan.candidatesConsidered + " loads → " +
             (plan.recommended
               ? "£" + plan.recommended.payout + " @ " + plan.recommended.ratePerMile + "/mi, " + plan.recommended.deadheadMiles + "mi dh"
               : "no feasible load"),
           plan.recommended ? "success" : "info"
         );
-      } catch (e) {
-        results.push(Object.assign(baseRec, { recommended: null, alternatives: [], error: e && e.message ? e.message : String(e) }));
-        await log("planner", i + 1 + "/" + availability.length + " " + a.driver.name + ": ERROR " + (e.message || e), "error");
-        await logError("background/runPlanner/driver", e, { driver: a.driver && a.driver.name, index: i });
+      } else {
+        // Fallback: search the driver's actual free location!
+        await log("planner", "No feasible company loads for " + a.driver.name + ". Falling back to driver location search near " + fl.city + "…", "info");
+        try {
+          const loc = {
+            name: fl.city,
+            stateCode: "UK",
+            country: "EU",
+            latitude: fl.latitude,
+            longitude: fl.longitude,
+            displayValue: fl.city + ", UK",
+          };
+          const payload = buildSearchPayload(loc, cfg);
+          const resp = await withRetry(() => searchLoadsInPage(tab.id, cfg, payload, csrf), "search", a.driver.name, 3);
+          const fallbackPlan = planLoadsForDriver(a, resp, cfg);
+          results.push(Object.assign(baseRec, fallbackPlan));
+          if (fallbackPlan.recommended) withRec++;
+          await log(
+            "planner",
+            i + 1 + "/" + availability.length + " " + a.driver.name + " @ " + fl.city + " (Fallback): " +
+              fallbackPlan.feasibleCount + " feasible / " + fallbackPlan.candidatesConsidered + " loads → " +
+              (fallbackPlan.recommended
+                ? "£" + fallbackPlan.recommended.payout + " @ " + fallbackPlan.recommended.ratePerMile + "/mi, " + fallbackPlan.recommended.deadheadMiles + "mi dh"
+                : "no feasible load"),
+            fallbackPlan.recommended ? "success" : "info"
+          );
+        } catch (e) {
+          results.push(Object.assign(baseRec, { recommended: null, alternatives: [], error: e && e.message ? e.message : String(e) }));
+          await log("planner", i + 1 + "/" + availability.length + " " + a.driver.name + ": ERROR " + (e.message || e), "error");
+          await logError("background/runPlanner/driver", e, { driver: a.driver && a.driver.name, index: i });
+        }
+        await sleep(base + rand(base));
       }
       await chrome.storage.local.set({ plannerResults: results });
-      await sleep(base + rand(base));
     }
 
     // Build the load-centric view: top N loads, each with its suitable drivers.
@@ -1930,6 +1959,55 @@ async function fetchApprovedPlaces(cfg) {
   }).filter((p) => p.city || (p.latitude && p.longitude));
 }
 
+async function getCompanyLocations(cfg, tabId) {
+  try {
+    if (!cfg.carrierCode) return [];
+    const approved = await fetchApprovedPlaces(cfg);
+    const placeCoords = [];
+    const cityCache = new Map();
+    async function coordsFor(cityName) {
+      const key = String(cityName).toLowerCase().trim();
+      if (cityCache.has(key)) return cityCache.get(key);
+      const coords = await lookupCityCoords(tabId, cfg, cityName);
+      cityCache.set(key, coords);
+      return coords;
+    }
+    for (const p of approved) {
+      let coords = null;
+      if (p.latitude && p.longitude) {
+        coords = { name: p.city || p.name, stateCode: "UK", country: "EU", latitude: p.latitude, longitude: p.longitude, radius: 250, isOrg: true };
+      } else if (p.city) {
+        const c = await coordsFor(p.city);
+        if (c) coords = { name: c.name, stateCode: c.stateCode || "UK", country: c.country || "EU", latitude: c.latitude, longitude: c.longitude, radius: 250, isOrg: true };
+      }
+      if (coords) placeCoords.push(coords);
+    }
+    return placeCoords;
+  } catch (e) {
+    await logError("background/getCompanyLocations", e);
+    return [];
+  }
+}
+
+async function updateOrganisationLocationsCache(cfg) {
+  try {
+    if (!cfg) cfg = await getConfig();
+    if (!cfg.carrierCode || !cfg.token) {
+      await chrome.storage.local.set({ organisationLocations: [] });
+      return [];
+    }
+    const tab = await findRelayTab();
+    const tabId = tab ? tab.id : null;
+    const orgLocs = await getCompanyLocations(cfg, tabId);
+    await chrome.storage.local.set({ organisationLocations: orgLocs });
+    console.log("[RLB background] updated organisation locations cache:", orgLocs);
+    return orgLocs;
+  } catch (e) {
+    await logError("background/updateOrganisationLocationsCache", e);
+    return [];
+  }
+}
+
 // A driver is only worth searching for if they're actually eligible to
 // work — active, identity-verified, and background-check cleared —
 // regardless of whether they currently have a trip.
@@ -2082,6 +2160,11 @@ async function refreshAvailabilityOnly() {
     await logError("background/refreshAvailabilityOnly/unassignedDrivers", e);
   }
 
+  try {
+    const companyLocs = await getCompanyLocations(cfg, tab.id);
+    await chrome.storage.local.set({ organisationLocations: companyLocs });
+  } catch (e) {}
+
   await chrome.storage.local.set({ plannerAvailability: combined, plannerAvailabilityAt: Date.now() });
   return { ok: true, count: combined.length };
 }
@@ -2123,6 +2206,11 @@ async function refreshUnassignedDriversOnly() {
   const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
   console.log("[RLB availability] unassigned-only run — " + unassigned.length + " driver(s):", unassigned);
   console.log("[RLB availability] unassigned JSON:", JSON.stringify(unassigned, null, 2));
+  try {
+    const companyLocs = await getCompanyLocations(cfg, tab.id);
+    await chrome.storage.local.set({ organisationLocations: companyLocs });
+  } catch (e) {}
+
   await chrome.storage.local.set({ plannerAvailabilityUnassigned: unassigned, plannerAvailabilityUnassignedAt: Date.now() });
   return { ok: true, count: unassigned.length };
 }
