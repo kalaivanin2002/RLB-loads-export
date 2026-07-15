@@ -1394,6 +1394,100 @@ function buildAvailability(entities, cfg) {
   return out;
 }
 
+// ── schedule-based availability (driver_schedule.json) ───────────────────────
+// Availability now comes from a shift schedule API instead of Relay trips. Each
+// driver has a shift window (working hours); they're FREE AFTER the shift ends.
+// The schedule carries no location/equipment, so for now every driver is placed
+// at one static home base (SCHEDULE_HOME_CITY) — this will later come from
+// per-driver localStorage (a separate task). Equipment stays null (the equipment
+// filter already skips loads only when both sides are known, so null = no filter).
+const SCHEDULE_URL = chrome.runtime.getURL("driver_schedule.json");
+const SCHEDULE_HOME_CITY = "Darlington, UK"; // temporary single home base for all drivers
+
+async function fetchDriverSchedule() {
+  const res = await fetch(SCHEDULE_URL, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error("driver_schedule HTTP " + res.status);
+  const data = await res.json();
+  const rows = Array.isArray(data && data.drivers) ? data.drivers : [];
+  return rows;
+}
+
+// Parse "YYYY-MM-DD" + "HH:MM" as UK local time → epoch ms. Relay/UK operates in
+// Europe/London, and the schedule times are wall-clock UK, so we anchor them to
+// that zone (handles BST/GMT) rather than the worker's own timezone.
+function parseUkLocalMs(dateStr, timeStr) {
+  if (!dateStr || !timeStr) return null;
+  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr).trim());
+  const tm = /^(\d{1,2}):(\d{2})$/.exec(String(timeStr).trim());
+  if (!dm || !tm) return null;
+  const y = +dm[1], mo = +dm[2], d = +dm[3], hh = +tm[1], mi = +tm[2];
+  // Start from the UTC interpretation, then correct by the Europe/London offset
+  // at that instant (BST = +1, GMT = 0) so the wall-clock time lands correctly.
+  const naiveUtc = Date.UTC(y, mo - 1, d, hh, mi, 0);
+  const offsetMin = londonOffsetMinutes(naiveUtc);
+  return naiveUtc - offsetMin * 60000;
+}
+
+// Europe/London UTC offset (in minutes) for a given instant, via Intl — avoids
+// hardcoding BST/GMT switch dates.
+function londonOffsetMinutes(ms) {
+  try {
+    const dtf = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/London", hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    const parts = dtf.formatToParts(new Date(ms));
+    const get = (t) => +parts.find((p) => p.type === t).value;
+    const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+    return Math.round((asUtc - ms) / 60000);
+  } catch (e) {
+    return 0; // fall back to UTC if Intl/timezone data is unavailable
+  }
+}
+
+// Build availability records from the schedule. tabId is used only to resolve the
+// static home city to coordinates (via the Relay cities endpoint) — no trips read.
+async function buildScheduleAvailability(tabId, cfg) {
+  const rows = await fetchDriverSchedule();
+  const now = Date.now();
+  const homeCoords = await lookupCityCoords(tabId, cfg, SCHEDULE_HOME_CITY);
+  if (!homeCoords) throw new Error('Could not resolve home city "' + SCHEDULE_HOME_CITY + '" to coordinates.');
+  const freeLocation = {
+    city: homeCoords.name, country: homeCoords.country || null,
+    latitude: homeCoords.latitude, longitude: homeCoords.longitude,
+  };
+
+  const out = [];
+  let noEnd = 0;
+  for (const r of rows) {
+    const name = (r && r.driver_name) ? String(r.driver_name).trim() : null;
+    if (!name) continue;
+    const endMs = parseUkLocalMs(r.end_date, r.end_time);
+    if (endMs == null) { noEnd++; continue; }
+    // Free AFTER the shift ends. If the shift already ended, they're free now.
+    const effFreeStart = Math.max(endMs, 0);
+    out.push({
+      driver: { id: null, staticDriverId: null, name: name, phoneNumber: null, email: null },
+      lastTripId: null,
+      lastTripState: null,
+      lastTripEndTime: new Date(endMs).toISOString(),
+      freeLocation: freeLocation,
+      domicile: null,
+      equipment: null,
+      freeAt: effFreeStart > now ? new Date(effFreeStart).toISOString() : null,
+      freeAtEffective: new Date(effFreeStart).toISOString(),
+      alreadyFree: !(effFreeStart > now),
+      nextTripStart: null,
+      freeWindowHours: null,
+      scheduleShift: { start: parseUkLocalMs(r.start_date, r.start_time), end: endMs },
+    });
+  }
+  out.sort((x, y) => Date.parse(x.freeAtEffective) - Date.parse(y.freeAtEffective));
+  console.log("[RLB availability] built " + out.length + " schedule-based driver(s); dropped " + noEnd + " (no/invalid shift end).");
+  return out;
+}
+
 // Default scoring weights. Components are emitted in the output so ranking is
 // transparent and tunable — adjust here (or we can expose them in settings).
 // payout = total £ of the run (favours big jobs over tiny shuttles);
@@ -2042,48 +2136,19 @@ async function refreshAvailabilityOnly() {
   const cfg = await getConfig();
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
-  const csrf = await resolveCsrf(tab.id);
-  if (!csrf) return { ok: false, error: "No CSRF token — reload the Relay tab." };
-  let inTransit, upcoming;
+  // Availability now comes from the shift schedule (driver_schedule.json), not
+  // Relay trips. A Relay tab is still needed to resolve the home city to
+  // coordinates via the cities endpoint.
+  let availability;
   try {
-    inTransit = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.inTransit);
+    availability = await buildScheduleAvailability(tab.id, cfg);
   } catch (e) {
-    return { ok: false, error: describeFetchEntitiesError(e, "in-transit") };
+    await logError("background/refreshAvailabilityOnly/schedule", e);
+    return { ok: false, error: "Couldn't build schedule availability: " + ((e && e.message) || e) };
   }
-  try {
-    upcoming = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.upcoming);
-  } catch (e) {
-    return { ok: false, error: describeFetchEntitiesError(e, "upcoming") };
-  }
-  // NOTE: this used to also pop open in-transit/upcoming windows here for the
-  // user to see. Removed: entitiesV2 data above is already fetched headlessly
-  // via scripting, so those windows were purely cosmetic — but they steal OS
-  // focus from the load-board tab, and the very next step (autopilot typing
-  // into the origin combobox) would then silently fail because the tab wasn't
-  // the focused/active one. That was the cause of "1st run finds 0 loads,
-  // origin box empty, 2nd run works" — it only ever happened on a cold run
-  // (the one that calls this function) and never on a warm run (which skips
-  // straight to searching with cached availability).
-  const entities = inTransit.concat(upcoming);
-  const availability = buildAvailability(entities, cfg);
-  console.log("[RLB availability] built " + availability.length + " trip-based driver(s):", availability);
   console.log("[RLB availability] JSON:", JSON.stringify(availability, null, 2));
-
-  // Fold in unassigned drivers too — non-fatal if this leg fails, since
-  // trip-based availability alone is still useful.
-  let combined = availability;
-  try {
-    const allDrivers = await fetchAllDrivers(tab.id, cfg);
-    const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
-    console.log("[RLB availability] " + unassigned.length + " unassigned driver(s):", unassigned);
-    console.log("[RLB availability] unassigned JSON:", JSON.stringify(unassigned, null, 2));
-    combined = availability.concat(unassigned);
-  } catch (e) {
-    await logError("background/refreshAvailabilityOnly/unassignedDrivers", e);
-  }
-
-  await chrome.storage.local.set({ plannerAvailability: combined, plannerAvailabilityAt: Date.now() });
-  return { ok: true, count: combined.length };
+  await chrome.storage.local.set({ plannerAvailability: availability, plannerAvailabilityAt: Date.now() });
+  return { ok: true, count: availability.length };
 }
 
 // Unassigned-drivers-ONLY refresh, for the dedicated "Find loads for
@@ -2098,33 +2163,19 @@ async function refreshUnassignedDriversOnly() {
   const cfg = await getConfig();
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
-  const csrf = await resolveCsrf(tab.id);
-  if (!csrf) return { ok: false, error: "No CSRF token — reload the Relay tab." };
-  let inTransit, upcoming;
+  // Both launcher flows now source from the shift schedule. This flow writes to
+  // its own storage key so the two buttons stay independent (see scoreLoadsForPage,
+  // which reads plannerAvailabilityUnassigned in "unassigned" mode).
+  let availability;
   try {
-    inTransit = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.inTransit);
+    availability = await buildScheduleAvailability(tab.id, cfg);
   } catch (e) {
-    return { ok: false, error: describeFetchEntitiesError(e, "in-transit") };
+    await logError("background/refreshUnassignedDriversOnly/schedule", e);
+    return { ok: false, error: "Couldn't build schedule availability: " + ((e && e.message) || e) };
   }
-  try {
-    upcoming = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.upcoming);
-  } catch (e) {
-    return { ok: false, error: describeFetchEntitiesError(e, "upcoming") };
-  }
-  // Trips here are only consulted to know WHO already has one (assignedDriverIds)
-  // — we don't need buildAvailability()'s trip-based records for this list.
-  const entities = inTransit.concat(upcoming);
-  let allDrivers;
-  try {
-    allDrivers = await fetchAllDrivers(tab.id, cfg);
-  } catch (e) {
-    return { ok: false, error: "Couldn't fetch the drivers list: " + ((e && e.message) || e) };
-  }
-  const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
-  console.log("[RLB availability] unassigned-only run — " + unassigned.length + " driver(s):", unassigned);
-  console.log("[RLB availability] unassigned JSON:", JSON.stringify(unassigned, null, 2));
-  await chrome.storage.local.set({ plannerAvailabilityUnassigned: unassigned, plannerAvailabilityUnassignedAt: Date.now() });
-  return { ok: true, count: unassigned.length };
+  console.log("[RLB availability] unassigned (schedule) JSON:", JSON.stringify(availability, null, 2));
+  await chrome.storage.local.set({ plannerAvailabilityUnassigned: availability, plannerAvailabilityUnassignedAt: Date.now() });
+  return { ok: true, count: availability.length };
 }
 
 // Score page-provided loads against stored availability → load-centric list
