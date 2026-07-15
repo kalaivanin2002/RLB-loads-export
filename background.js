@@ -1230,7 +1230,7 @@ function pageFetchTrips(url, init) {
             entityType: e.entityType,
             tourState: e.tourState || e.blockState || null,
             startTime: e.startTime || e.firstPickupTime || null,
-            endTime: e.endTime || e.lastDeliveryTime || null,
+            endTime: e.endTime || e.lastPickupTime || e.lastDeliveryTime || null,
             domicileRoute: e.domicileRoute || null,
             drivers: drivers,
             finalDropoff: best,
