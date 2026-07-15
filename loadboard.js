@@ -82,24 +82,18 @@
       "#rlb-tip{position:fixed;z-index:2147483647;max-width:360px;background:#0b0f19;color:#ffffff;font:12px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:none;display:none;}",
       "#rlb-tip .h{font-weight:700;margin-bottom:4px;color:#fff;}",
       "#rlb-tip table{width:100%;border-collapse:collapse;}",
-      "#rlb-tip td{padding:2px 8px 2px 0;white-space:nowrap;border:none;color:#ffffff;}",
+      "#rlb-tip td{padding:2px 6px 2px 0;white-space:nowrap;border:none;color:#ffffff;}",
       // Driver name truncates (single line + ellipsis) so a long name keeps the row a
       // uniform height and the tooltip narrow; full name still shows on hover.
-      "#rlb-tip .rlb-dname{display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;}",
+      "#rlb-tip .rlb-dname{display:inline-block;max-width:108px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;}",
       "#rlb-tip td:not(:first-child){text-align:right;}",
-      "#rlb-tip th{padding:0 8px 3px 0;white-space:nowrap;text-align:left;color:#ffffff;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none;}",
+      "#rlb-tip th{padding:0 6px 3px 0;white-space:nowrap;text-align:left;color:#ffffff;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none;}",
       "#rlb-tip th:not(:first-child){text-align:right;}",
       "#rlb-tip tr.b td{color:#4ade80;font-weight:600;}",
-      // Drivers whose match relies on the availability lead — the load picks up
-      // BEFORE their drop-off/free time — are flagged red (see onEnter). Placed
-      // after .b so the red warning wins when the best-fit driver is also early.
-      // Bright reds + a faint row wash so the flag stays vivid on the near-black
-      // tooltip (dark reds like #dc2626 fade into the #0b0f19 background).
-      "#rlb-tip tr.lead td{color:#ff6b6b;background:rgba(239,68,68,.16);}",
-      "#rlb-tip .rlb-nwrap{display:inline-block;position:relative;vertical-align:middle;}",
-      // EARLY tag: absolutely positioned, OUT of the text flow, so it never changes the
-      // row height or pushes the name/numbers off their baseline. Sits right after the name.
-      "#rlb-tip tr.lead .rlb-nwrap::after{content:'EARLY';position:absolute;left:100%;top:50%;transform:translateY(-50%);margin-left:6px;background:#ef4444;color:#fff;font:700 9px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:1px 4px;border-radius:3px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;}",
+      // Drivers whose match relies on the availability lead (pickup before drop-off)
+      // are indicated by red text ONLY — same font/size as the other names, no badge.
+      // Placed after .b so red wins when the best-fit driver is also a lead match.
+      "#rlb-tip tr.lead td{color:#ff6b6b;}",
       // Hero launcher button (top-right, near the search).
       "#rlb-launch,#rlb-launch *{box-sizing:border-box;}",
       "#rlb-launch{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:rgb(0,104,141);color:#fff;border:none;border-radius:4px;padding:12px 20px;font:500 14px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:none;transition:background-color .15s ease;}",
@@ -1632,9 +1626,7 @@
       var usesLead = driverUsesLead(info, d); // pickup before drop-off → matches via the lead
       var cls = (i === 0 ? "b" : "") + (usesLead ? " lead" : "");
       return (
-        // The "EARLY" tag is added by CSS (.rlb-nwrap::after on lead rows) and is
-        // absolutely positioned, so it can't alter row height or baseline alignment.
-        '<tr class="' + cls + '"><td><span class="rlb-nwrap"><span class="rlb-dname" title="' + esc(name) + '">' + esc(name) + "</span></span></td><td>" +
+        '<tr class="' + cls + '"><td><span class="rlb-dname" title="' + esc(name) + '">' + esc(name) + "</span></td><td>" +
         n1(d.deadheadMiles) + "mi</td><td>" + (d.returnMiles == null ? "—" : n1(d.returnMiles) + "mi") + "</td><td>" +
         n1(d.pickupGapHours) + "h</td><td>" + n1(d.fitScore != null ? d.fitScore * 100 : null) + "</td></tr>"
       );
