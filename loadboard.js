@@ -20,6 +20,17 @@
   var observer = null;
   var scheduled = false;
 
+  // ── manual auto-refresh state ────────────────────────────────────────────────
+  // Our own timed refresh: we click Relay's manual refresh control on a repeating
+  // timer, each interval a random value in [arMin, arMax] seconds. Relay's OWN
+  // auto-refresh stays off (ensureAutoRefreshOff) — this replaces it on our clock.
+  var AR_MIN_S = 3, AR_MAX_S = 30;         // dropdown bounds (seconds)
+  var arEnabled = false;                    // is our auto-refresh running?
+  var arMin = 6, arMax = 9;                 // chosen interval bounds (seconds)
+  var arTimer = null;                       // setTimeout handle for the next refresh
+  var arCountdownTimer = null;              // setInterval handle for the countdown display
+  var arNextAt = 0;                         // timestamp (ms) of the next scheduled refresh
+
   var esc = function (s) {
     return s == null ? "" : String(s).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -88,6 +99,23 @@
       "#rlb-only-mine .rlb-slider::before{content:\"\";position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s ease;}",
       "#rlb-only-mine .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
       "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
+      // Manual auto-refresh chip — our own timed refresh (Relay's native one stays off).
+      // Same visual language as the "only my drivers" chip (fixed, white, rounded).
+      "#rlb-autorefresh,#rlb-autorefresh *{box-sizing:border-box;}",
+      "#rlb-autorefresh{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:10px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
+      "#rlb-autorefresh .rlb-switch{position:relative;display:inline-block;width:34px;height:18px;flex:none;}",
+      "#rlb-autorefresh .rlb-switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;}",
+      "#rlb-autorefresh .rlb-slider{position:absolute;inset:0;background:#cbd5e1;border-radius:999px;transition:background .15s ease;}",
+      "#rlb-autorefresh .rlb-slider::before{content:\"\";position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s ease;}",
+      "#rlb-autorefresh .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
+      "#rlb-autorefresh .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
+      "#rlb-autorefresh label.lbl{cursor:pointer;}",
+      "#rlb-autorefresh .rng{display:inline-flex;align-items:center;gap:5px;color:#475569;font-size:12px;}",
+      "#rlb-autorefresh select{font:500 12px/1 inherit;color:#0f172a;background:#f8fafc;border:1px solid #cbd5e1;border-radius:5px;padding:4px 6px;cursor:pointer;}",
+      "#rlb-autorefresh select:disabled{opacity:.5;cursor:default;}",
+      "#rlb-autorefresh .cd{min-width:34px;text-align:right;color:#0f172a;font-weight:600;font-size:12px;font-variant-numeric:tabular-nums;}",
+      "#rlb-autorefresh.err{border-color:#fca5a5;}",
+      "#rlb-autorefresh .rng.err select{border-color:#ef4444;}",
       // Hide non-matching load cards when the filter is on (data-attr = React-safe,
       // same approach as the highlight outline — we never touch Relay's child nodes).
       "[data-rlb-hidden]{display:none!important;}",
@@ -205,6 +233,22 @@
       schedulePaint();
     });
 
+    // Manual auto-refresh chip: an on/off toggle plus Min/Max second dropdowns.
+    // When on, we re-fetch the board on our own random [min,max] timer.
+    var ar = document.createElement("div");
+    ar.id = "rlb-autorefresh";
+    var opts = "";
+    for (var s = AR_MIN_S; s <= AR_MAX_S; s++) opts += '<option value="' + s + '">' + s + "s</option>";
+    ar.innerHTML =
+      '<span class="rlb-switch"><input id="rlb-ar-cb" type="checkbox" /><span class="rlb-slider"></span></span>' +
+      '<label class="lbl" for="rlb-ar-cb">Auto-refresh</label>' +
+      '<span class="rng"><span>min</span><select id="rlb-ar-min">' + opts + "</select>" +
+      '<span>max</span><select id="rlb-ar-max">' + opts + "</select></span>" +
+      '<span id="rlb-ar-cd" class="cd"></span>';
+    ar.title = "Refresh loads on your own timer (Relay's native auto-refresh stays off). Each cycle waits a random time between min and max.";
+    document.body.appendChild(ar);
+    wireAutoRefreshChip();
+
     var card = document.createElement("div");
     card.id = "rlb-card";
     card.innerHTML =
@@ -270,6 +314,16 @@
         only.style.left = Math.max(8, r.left + 12) + "px";
         only.style.top = Math.max(8, r.bottom - only.offsetHeight - 12) + "px";
       }
+    }
+
+    // Auto-refresh chip sits directly under the "only my drivers" chip, left-aligned
+    // to it, so the two read as one stacked control group.
+    var arChip = document.getElementById("rlb-autorefresh");
+    if (arChip && only) {
+      var oR = only.getBoundingClientRect();
+      arChip.style.right = "auto";
+      arChip.style.left = Math.max(8, oR.left) + "px";
+      arChip.style.top = (oR.bottom + 8) + "px";
     }
   }
 
@@ -1365,6 +1419,176 @@
     }
   }
 
+  // ── manual auto-refresh (our own timer) ──────────────────────────────────────
+  // Relay's native auto-refresh stays off; instead WE click Relay's manual
+  // "refresh" control on a repeating timer, each cycle waiting a random number of
+  // seconds in [arMin, arMax]. Clicking Relay's own control re-runs its real
+  // search, whose response flows back through hook.js → gets re-scored and
+  // re-painted automatically (same pipeline as pagination/live search).
+
+  // Locate Relay's manual refresh/reload control in the utility bar. Defensive:
+  // the DOM has no stable id for it, so try several strategies and never return
+  // the auto-refresh switch itself (which we keep off).
+  function findRelayRefreshControl() {
+    var bar = document.getElementById("utility-bar") || document;
+    var wantedRe = /(^|\b)(refresh|reload)(\b|$)/i;
+    var autoRe = /auto[\s-]?refresh/i;
+    var norm = function (s) { return (s || "").replace(/\s+/g, " ").trim(); };
+
+    // The native auto-refresh toggle — used to exclude it and its wrapping label.
+    var autoSwitch = bar.querySelector && bar.querySelector('input[role="switch"], [role="switch"]');
+
+    var candidates = [].slice.call(
+      (bar.querySelectorAll ? bar : document).querySelectorAll('button, [role="button"], a[role="button"]')
+    );
+    for (var i = 0; i < candidates.length; i++) {
+      var el = candidates[i];
+      if (autoSwitch && (el === autoSwitch || el.contains(autoSwitch) || (autoSwitch.contains && autoSwitch.contains(el)))) continue;
+      var aria = norm(el.getAttribute && el.getAttribute("aria-label"));
+      var title = norm(el.getAttribute && el.getAttribute("title"));
+      var text = norm(el.textContent);
+      var hay = aria || title || text;
+      // Must mention refresh/reload but NOT be the "auto-refresh" toggle.
+      if (autoRe.test(hay)) continue;
+      if (wantedRe.test(aria) || wantedRe.test(title) || wantedRe.test(text)) return el;
+      // Icon-only buttons: check a data-testid / class hint as a last resort.
+      var testid = norm(el.getAttribute && el.getAttribute("data-testid"));
+      if (wantedRe.test(testid) && !autoRe.test(testid)) return el;
+    }
+    return null;
+  }
+
+  // Fire one refresh: click Relay's control if found. Returns true if it clicked.
+  function doAutoRefresh() {
+    if (!onLoadboard()) return false;
+    var ctrl = findRelayRefreshControl();
+    if (ctrl) {
+      try { ctrl.click(); return true; }
+      catch (e) { logError("autoRefreshClick", e); return false; }
+    }
+    return false;
+  }
+
+  var arRand = function (lo, hi) { return lo + Math.random() * (hi - lo); };
+
+  function clearAutoRefreshTimers() {
+    if (arTimer) { clearTimeout(arTimer); arTimer = null; }
+    if (arCountdownTimer) { clearInterval(arCountdownTimer); arCountdownTimer = null; }
+    arNextAt = 0;
+  }
+
+  function updateAutoRefreshCountdown() {
+    var el = document.getElementById("rlb-ar-cd");
+    if (!el) return;
+    if (!arEnabled || !arNextAt) { el.textContent = ""; return; }
+    var secs = Math.max(0, Math.ceil((arNextAt - Date.now()) / 1000));
+    el.textContent = secs + "s";
+  }
+
+  // Schedule the next refresh at a random point in [arMin, arMax] seconds.
+  function scheduleNextRefresh() {
+    if (!arEnabled) return;
+    var lo = Math.min(arMin, arMax), hi = Math.max(arMin, arMax);
+    var waitMs = Math.round(arRand(lo, hi) * 1000);
+    arNextAt = Date.now() + waitMs;
+    arTimer = setTimeout(function () {
+      arTimer = null;
+      doAutoRefresh();
+      scheduleNextRefresh(); // pick a fresh random interval each cycle
+    }, waitMs);
+    updateAutoRefreshCountdown();
+  }
+
+  function startAutoRefresh() {
+    clearAutoRefreshTimers();
+    if (!arEnabled) return;
+    arCountdownTimer = setInterval(updateAutoRefreshCountdown, 500);
+    scheduleNextRefresh();
+  }
+
+  function stopAutoRefresh() {
+    clearAutoRefreshTimers();
+    updateAutoRefreshCountdown();
+  }
+
+  // Min ≤ Max is required. Show an error state and don't run while invalid.
+  function autoRefreshRangeValid() { return arMin <= arMax; }
+
+  function reflectAutoRefreshValidity() {
+    var chip = document.getElementById("rlb-autorefresh");
+    var rng = chip && chip.querySelector(".rng");
+    var bad = !autoRefreshRangeValid();
+    if (chip) chip.classList.toggle("err", bad);
+    if (rng) rng.classList.toggle("err", bad);
+    if (rng) rng.title = bad ? "Min must be less than or equal to Max." : "";
+  }
+
+  function persistAutoRefreshPrefs() {
+    try {
+      chrome.storage.local.set({ arEnabled: arEnabled, arMin: arMin, arMax: arMax });
+    } catch (e) { /* context invalidated */ }
+  }
+
+  // Wire the chip's toggle + dropdowns. Called once when the panel is built.
+  function wireAutoRefreshChip() {
+    var cb = document.getElementById("rlb-ar-cb");
+    var minSel = document.getElementById("rlb-ar-min");
+    var maxSel = document.getElementById("rlb-ar-max");
+    if (!cb || !minSel || !maxSel) return;
+
+    cb.checked = arEnabled;
+    minSel.value = String(arMin);
+    maxSel.value = String(arMax);
+    minSel.disabled = maxSel.disabled = false;
+    reflectAutoRefreshValidity();
+
+    cb.addEventListener("change", function () {
+      arEnabled = cb.checked && autoRefreshRangeValid();
+      if (cb.checked && !autoRefreshRangeValid()) {
+        // Refuse to turn on with an invalid range — snap the toggle back off.
+        cb.checked = false;
+        arEnabled = false;
+      }
+      persistAutoRefreshPrefs();
+      if (arEnabled) startAutoRefresh(); else stopAutoRefresh();
+    });
+
+    var onRangeChange = function () {
+      arMin = parseInt(minSel.value, 10) || AR_MIN_S;
+      arMax = parseInt(maxSel.value, 10) || AR_MAX_S;
+      reflectAutoRefreshValidity();
+      persistAutoRefreshPrefs();
+      if (!autoRefreshRangeValid()) {
+        // Invalid range disables the running timer until it's fixed.
+        if (arEnabled) { arEnabled = false; cb.checked = false; stopAutoRefresh(); persistAutoRefreshPrefs(); }
+        return;
+      }
+      // Valid range: if enabled, restart so the new bounds take effect immediately.
+      if (arEnabled) startAutoRefresh();
+    };
+    minSel.addEventListener("change", onRangeChange);
+    maxSel.addEventListener("change", onRangeChange);
+  }
+
+  // Restore persisted auto-refresh prefs, sync the chip, and start if enabled.
+  function loadAutoRefreshPrefs() {
+    try {
+      chrome.storage.local.get(["arEnabled", "arMin", "arMax"], function (r) {
+        if (typeof r.arMin === "number") arMin = Math.min(Math.max(r.arMin, AR_MIN_S), AR_MAX_S);
+        if (typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
+        arEnabled = !!r.arEnabled && autoRefreshRangeValid();
+        var cb = document.getElementById("rlb-ar-cb");
+        var minSel = document.getElementById("rlb-ar-min");
+        var maxSel = document.getElementById("rlb-ar-max");
+        if (cb) cb.checked = arEnabled;
+        if (minSel) minSel.value = String(arMin);
+        if (maxSel) maxSel.value = String(arMax);
+        reflectAutoRefreshValidity();
+        if (arEnabled) startAutoRefresh();
+      });
+    } catch (e) { /* context invalidated */ }
+  }
+
   // ── hover tooltip ───────────────────────────────────────────────────────────────
   function ensureTip() {
     if (tip) return tip;
@@ -1415,6 +1639,7 @@
     injectStyles();
     ensurePanel();
     loadOnlyMinePref();
+    loadAutoRefreshPrefs();
     loadDriverCount();
     replayBufferedSearch();
     observer = new MutationObserver(schedulePaint);
