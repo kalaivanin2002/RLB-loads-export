@@ -130,7 +130,10 @@
       "#rlb-card .head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;background:#0f172a;color:#fff;}",
       "#rlb-card .head b{font-size:14px;}",
       "#rlb-card .head button{background:transparent;border:none;color:#cbd5e1;font-size:18px;line-height:1;cursor:pointer;}",
+      "#rlb-card .head .head-actions{display:inline-flex;align-items:center;gap:4px;}",
       "#rlb-card .body{padding:16px;}",
+      // Minimized: collapse to just the header bar (toggled by the ▾ button).
+      "#rlb-card.min .body{display:none;}",
       "#rlb-card .step{display:flex;align-items:center;gap:10px;padding:5px 0;color:#94a3b8;}",
       "#rlb-card .step.active{color:#1e293b;font-weight:600;}",
       "#rlb-card .step.done{color:#16a34a;}",
@@ -235,10 +238,14 @@
     var card = document.createElement("div");
     card.id = "rlb-card";
     card.innerHTML =
-      '<div class="head"><b>⚡ Best loads</b><button id="rlb-card-x" type="button" title="Close">×</button></div>' +
+      '<div class="head"><b>⚡ Best loads</b><span class="head-actions">' +
+      '<button id="rlb-card-min" type="button" title="Minimize">▾</button>' +
+      '<button id="rlb-card-x" type="button" title="Close">×</button></span></div>' +
       '<div class="body"><div id="rlb-card-content"></div></div>';
     document.body.appendChild(card);
     card.querySelector("#rlb-card-x").addEventListener("click", hideCard);
+    var minBtn = card.querySelector("#rlb-card-min");
+    if (minBtn) minBtn.addEventListener("click", toggleMinCard);
 
     positionLauncher();
     window.addEventListener("scroll", positionLauncher, true);
@@ -300,8 +307,23 @@
     }
   }
 
-  function showCard() { var c = document.getElementById("rlb-card"); if (c) c.classList.add("show"); }
+  function showCard() {
+    // A fresh show (e.g. clicking ⚡ again) re-expands a previously minimized card.
+    var c = document.getElementById("rlb-card");
+    if (c) { c.classList.add("show"); c.classList.remove("min"); }
+    var mn = document.getElementById("rlb-card-min");
+    if (mn) { mn.textContent = "▾"; mn.title = "Minimize"; }
+  }
   function hideCard() { var c = document.getElementById("rlb-card"); if (c) c.classList.remove("show"); }
+  // Collapse the card to just its header bar; click again to expand. Content is
+  // kept (not cleared), so expanding restores whatever was showing.
+  function toggleMinCard() {
+    var c = document.getElementById("rlb-card");
+    if (!c) return;
+    var min = c.classList.toggle("min");
+    var b = document.getElementById("rlb-card-min");
+    if (b) { b.textContent = min ? "▸" : "▾"; b.title = min ? "Expand" : "Minimize"; }
+  }
   function setCard(html) { var el = document.getElementById("rlb-card-content"); if (el) el.innerHTML = html; }
   // Both launcher buttons share one busy state — only one autopilot run
   // (of either kind) can be in flight at a time (see autofillBusy).
