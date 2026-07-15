@@ -85,7 +85,7 @@
       "#rlb-tip td{padding:2px 8px 2px 0;white-space:nowrap;border:none;color:#ffffff;}",
       // Driver name truncates (single line + ellipsis) so a long name keeps the row a
       // uniform height and the tooltip narrow; full name still shows on hover.
-      "#rlb-tip .rlb-dname{display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;}",
+      "#rlb-tip .rlb-dname{display:inline-block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;}",
       "#rlb-tip td:not(:first-child){text-align:right;}",
       "#rlb-tip th{padding:0 8px 3px 0;white-space:nowrap;text-align:left;color:#ffffff;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none;}",
       "#rlb-tip th:not(:first-child){text-align:right;}",
@@ -96,7 +96,7 @@
       // Bright reds + a faint row wash so the flag stays vivid on the near-black
       // tooltip (dark reds like #dc2626 fade into the #0b0f19 background).
       "#rlb-tip tr.lead td{color:#ff6b6b;background:rgba(239,68,68,.16);}",
-      "#rlb-tip .rlb-lead{display:inline-block;margin-left:6px;background:#ef4444;color:#fff;font:600 10px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:2px 5px;border-radius:4px;vertical-align:middle;text-transform:uppercase;letter-spacing:.03em;box-shadow:0 0 0 1px rgba(255,255,255,.18),0 1px 2px rgba(0,0,0,.4);}",
+      "#rlb-tip .rlb-lead{display:inline-block;margin-left:6px;background:#ef4444;color:#fff;font:700 9px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:1px 4px;border-radius:3px;vertical-align:middle;text-transform:uppercase;letter-spacing:.04em;}",
       // Hero launcher button (top-right, near the search).
       "#rlb-launch,#rlb-launch *{box-sizing:border-box;}",
       "#rlb-launch{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:rgb(0,104,141);color:#fff;border:none;border-radius:4px;padding:12px 20px;font:500 14px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:none;transition:background-color .15s ease;}",
