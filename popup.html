@@ -94,6 +94,26 @@
         <input id="relayBase" type="text" placeholder="https://relay.amazon.co.uk" />
         <small class="field-hint">Your Amazon Relay site (e.g. .co.uk for UK). Must match the tab you're logged into.</small>
       </label>
+      <div class="settings-title">Auto-refresh loads</div>
+      <label class="field check">
+        <input id="arEnabled" type="checkbox" />
+        <span>Enable auto-refresh</span>
+        <small class="field-hint">Refresh the load board on our own timer (Relay's native auto-refresh stays off). Each cycle waits a random time between min and max.</small>
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span>Min interval (s)</span>
+          <select id="arMin"></select>
+          <small class="field-hint">Shortest wait between refreshes.</small>
+        </label>
+        <label class="field">
+          <span>Max interval (s)</span>
+          <select id="arMax"></select>
+          <small class="field-hint">Longest wait between refreshes. Must be ≥ min.</small>
+        </label>
+      </div>
+      <small id="arError" class="field-hint" style="color:#dc2626;display:none;">Min must be less than or equal to Max.</small>
+
       <div class="settings-title">Scoring weights (relative)</div>
       <div class="field-row">
         <label class="field">

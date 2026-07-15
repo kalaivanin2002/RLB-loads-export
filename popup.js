@@ -43,7 +43,14 @@
     weightDeadhead: 0.2,
     weightTiming: 0.15,
     weightReposition: 0.2,
+    // Manual auto-refresh: our own timed board refresh (Relay's native one stays off).
+    arEnabled: false,
+    arMin: 6,
+    arMax: 9,
   };
+
+  // Second bound for the auto-refresh interval dropdowns (seconds).
+  const AR_MIN_S = 3, AR_MAX_S = 30;
 
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -69,9 +76,33 @@
     weightDeadhead: $("weightDeadhead"),
     weightTiming: $("weightTiming"),
     weightReposition: $("weightReposition"),
+    arEnabled: $("arEnabled"),
+    arMin: $("arMin"),
+    arMax: $("arMax"),
+    arError: $("arError"),
     saveAdmin: $("saveAdmin"),
     saveDev: $("saveDev"),
   };
+
+  // Populate the min/max interval dropdowns (3s … 30s).
+  (function fillIntervalOptions() {
+    let opts = "";
+    for (let s = AR_MIN_S; s <= AR_MAX_S; s++) opts += '<option value="' + s + '">' + s + "s</option>";
+    els.arMin.innerHTML = opts;
+    els.arMax.innerHTML = opts;
+  })();
+
+  // Min ≤ Max guard: show the error hint when the range is invalid.
+  function reflectArValidity() {
+    const min = parseInt(els.arMin.value, 10);
+    const max = parseInt(els.arMax.value, 10);
+    const bad = min > max;
+    els.arError.style.display = bad ? "block" : "none";
+    return !bad;
+  }
+  els.arMin.addEventListener("change", reflectArValidity);
+  els.arMax.addEventListener("change", reflectArValidity);
+  els.arEnabled.addEventListener("change", reflectArValidity);
 
   function loadSettings() {
     chrome.storage.local.get(Object.keys(DEFAULTS), (r) => {
@@ -94,6 +125,12 @@
       els.weightDeadhead.value = cfg.weightDeadhead;
       els.weightTiming.value = cfg.weightTiming;
       els.weightReposition.value = cfg.weightReposition;
+      // Clamp saved interval into the dropdown range so .value always matches an option.
+      const clampAr = (v, d) => Math.min(Math.max(parseInt(v, 10) || d, AR_MIN_S), AR_MAX_S);
+      els.arEnabled.checked = cfg.arEnabled === true;
+      els.arMin.value = String(clampAr(cfg.arMin, DEFAULTS.arMin));
+      els.arMax.value = String(clampAr(cfg.arMax, DEFAULTS.arMax));
+      reflectArValidity();
     });
   }
 
@@ -146,7 +183,13 @@
       weightDeadhead: numField(els.weightDeadhead, DEFAULTS.weightDeadhead),
       weightTiming: numField(els.weightTiming, DEFAULTS.weightTiming),
       weightReposition: numField(els.weightReposition, DEFAULTS.weightReposition),
+      arMin: parseInt(els.arMin.value, 10) || DEFAULTS.arMin,
+      arMax: parseInt(els.arMax.value, 10) || DEFAULTS.arMax,
+      // Only allow enabling when the range is valid — otherwise force it off.
+      arEnabled: els.arEnabled.checked && reflectArValidity(),
     };
+    // Reflect the possibly-forced-off state back into the checkbox.
+    els.arEnabled.checked = cfg.arEnabled;
     chrome.storage.local.set(cfg, flashSaved);
   }
 

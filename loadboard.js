@@ -24,12 +24,14 @@
   // Our own timed refresh: we click Relay's manual refresh control on a repeating
   // timer, each interval a random value in [arMin, arMax] seconds. Relay's OWN
   // auto-refresh stays off (ensureAutoRefreshOff) — this replaces it on our clock.
-  var AR_MIN_S = 3, AR_MAX_S = 30;         // dropdown bounds (seconds)
+  // Config lives in the popup's Developer settings and is read from storage here;
+  // a storage.onChanged listener starts/stops the timer live without a reload.
+  var AR_MIN_S = 3, AR_MAX_S = 30;         // valid interval bounds (seconds)
   var arEnabled = false;                    // is our auto-refresh running?
   var arMin = 6, arMax = 9;                 // chosen interval bounds (seconds)
   var arTimer = null;                       // setTimeout handle for the next refresh
-  var arCountdownTimer = null;              // setInterval handle for the countdown display
-  var arNextAt = 0;                         // timestamp (ms) of the next scheduled refresh
+  var arRescoreTimer = null;                // follow-up timer that re-scores after a refresh
+  var lastScoredSearchAt = 0;               // lastSearchAt we last handed to scoreAndPaint
 
   var esc = function (s) {
     return s == null ? "" : String(s).replace(/[&<>"']/g, function (c) {
@@ -99,23 +101,6 @@
       "#rlb-only-mine .rlb-slider::before{content:\"\";position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s ease;}",
       "#rlb-only-mine .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
       "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
-      // Manual auto-refresh chip — our own timed refresh (Relay's native one stays off).
-      // Same visual language as the "only my drivers" chip (fixed, white, rounded).
-      "#rlb-autorefresh,#rlb-autorefresh *{box-sizing:border-box;}",
-      "#rlb-autorefresh{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:10px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
-      "#rlb-autorefresh .rlb-switch{position:relative;display:inline-block;width:34px;height:18px;flex:none;}",
-      "#rlb-autorefresh .rlb-switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;}",
-      "#rlb-autorefresh .rlb-slider{position:absolute;inset:0;background:#cbd5e1;border-radius:999px;transition:background .15s ease;}",
-      "#rlb-autorefresh .rlb-slider::before{content:\"\";position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s ease;}",
-      "#rlb-autorefresh .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
-      "#rlb-autorefresh .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
-      "#rlb-autorefresh label.lbl{cursor:pointer;}",
-      "#rlb-autorefresh .rng{display:inline-flex;align-items:center;gap:5px;color:#475569;font-size:12px;}",
-      "#rlb-autorefresh select{font:500 12px/1 inherit;color:#0f172a;background:#f8fafc;border:1px solid #cbd5e1;border-radius:5px;padding:4px 6px;cursor:pointer;}",
-      "#rlb-autorefresh select:disabled{opacity:.5;cursor:default;}",
-      "#rlb-autorefresh .cd{min-width:34px;text-align:right;color:#0f172a;font-weight:600;font-size:12px;font-variant-numeric:tabular-nums;}",
-      "#rlb-autorefresh.err{border-color:#fca5a5;}",
-      "#rlb-autorefresh .rng.err select{border-color:#ef4444;}",
       // Hide non-matching load cards when the filter is on (data-attr = React-safe,
       // same approach as the highlight outline — we never touch Relay's child nodes).
       "[data-rlb-hidden]{display:none!important;}",
@@ -233,22 +218,6 @@
       schedulePaint();
     });
 
-    // Manual auto-refresh chip: an on/off toggle plus Min/Max second dropdowns.
-    // When on, we re-fetch the board on our own random [min,max] timer.
-    var ar = document.createElement("div");
-    ar.id = "rlb-autorefresh";
-    var opts = "";
-    for (var s = AR_MIN_S; s <= AR_MAX_S; s++) opts += '<option value="' + s + '">' + s + "s</option>";
-    ar.innerHTML =
-      '<span class="rlb-switch"><input id="rlb-ar-cb" type="checkbox" /><span class="rlb-slider"></span></span>' +
-      '<label class="lbl" for="rlb-ar-cb">Auto-refresh</label>' +
-      '<span class="rng"><span>min</span><select id="rlb-ar-min">' + opts + "</select>" +
-      '<span>max</span><select id="rlb-ar-max">' + opts + "</select></span>" +
-      '<span id="rlb-ar-cd" class="cd"></span>';
-    ar.title = "Refresh loads on your own timer (Relay's native auto-refresh stays off). Each cycle waits a random time between min and max.";
-    document.body.appendChild(ar);
-    wireAutoRefreshChip();
-
     var card = document.createElement("div");
     card.id = "rlb-card";
     card.innerHTML =
@@ -314,16 +283,6 @@
         only.style.left = Math.max(8, r.left + 12) + "px";
         only.style.top = Math.max(8, r.bottom - only.offsetHeight - 12) + "px";
       }
-    }
-
-    // Auto-refresh chip sits directly under the "only my drivers" chip, left-aligned
-    // to it, so the two read as one stacked control group.
-    var arChip = document.getElementById("rlb-autorefresh");
-    if (arChip && only) {
-      var oR = only.getBoundingClientRect();
-      arChip.style.right = "auto";
-      arChip.style.left = Math.max(8, oR.left) + "px";
-      arChip.style.top = (oR.bottom + 8) + "px";
     }
   }
 
@@ -1461,135 +1420,107 @@
   }
 
   // Fire one refresh: click Relay's control if found. Returns true if it clicked.
+  // Clicking refresh re-runs Relay's own /loadboard/search; hook.js intercepts the
+  // response and bridge.js buffers it into lastSearchLoads/lastSearchAt. But that
+  // buffered search is NOT guaranteed to reach our RLB_SEARCH message listener on a
+  // manual refresh, so new loads would never get scored/highlighted. To close that
+  // gap we schedule an explicit re-score: after a short delay (for Relay to
+  // fetch+render), read the freshest buffered search and run it through the SAME
+  // scoreAndPaint path the launcher uses — so newly-arrived loads that match a
+  // driver get highlighted just like on the initial search.
   function doAutoRefresh() {
     if (!onLoadboard()) return false;
     var ctrl = findRelayRefreshControl();
-    if (ctrl) {
-      try { ctrl.click(); return true; }
-      catch (e) { logError("autoRefreshClick", e); return false; }
-    }
-    return false;
+    if (!ctrl) return false;
+    try { ctrl.click(); }
+    catch (e) { logError("autoRefreshClick", e); return false; }
+    scheduleRescoreAfterRefresh();
+    return true;
+  }
+
+  // After a refresh, re-score the newest intercepted search so new matching loads
+  // highlight. Only scores a buffer NEWER than the one we last scored, so we don't
+  // redundantly re-score stale results.
+  function scheduleRescoreAfterRefresh() {
+    if (arRescoreTimer) { clearTimeout(arRescoreTimer); arRescoreTimer = null; }
+    arRescoreTimer = setTimeout(function () {
+      arRescoreTimer = null;
+      if (!arEnabled || !onLoadboard()) return;
+      try {
+        chrome.storage.local.get(["lastSearchLoads", "lastSearchAt"], function (r) {
+          var at = r.lastSearchAt || 0;
+          if (at && at > lastScoredSearchAt && Array.isArray(r.lastSearchLoads) && r.lastSearchLoads.length) {
+            lastScoredSearchAt = at;
+            console.log("[RLB board] auto-refresh re-score:", r.lastSearchLoads.length, "loads");
+            scoreAndPaint(r.lastSearchLoads);
+          }
+        });
+      } catch (e) { /* context invalidated */ }
+    }, 2000); // ~1.5s: enough for Relay to return + render the refreshed search
   }
 
   var arRand = function (lo, hi) { return lo + Math.random() * (hi - lo); };
 
-  function clearAutoRefreshTimers() {
+  function clearAutoRefreshTimer() {
     if (arTimer) { clearTimeout(arTimer); arTimer = null; }
-    if (arCountdownTimer) { clearInterval(arCountdownTimer); arCountdownTimer = null; }
-    arNextAt = 0;
+    if (arRescoreTimer) { clearTimeout(arRescoreTimer); arRescoreTimer = null; }
   }
 
-  function updateAutoRefreshCountdown() {
-    var el = document.getElementById("rlb-ar-cd");
-    if (!el) return;
-    if (!arEnabled || !arNextAt) { el.textContent = ""; return; }
-    var secs = Math.max(0, Math.ceil((arNextAt - Date.now()) / 1000));
-    el.textContent = secs + "s";
-  }
+  // Min ≤ Max is required; refuse to run while the range is invalid.
+  function autoRefreshRangeValid() { return arMin <= arMax; }
 
   // Schedule the next refresh at a random point in [arMin, arMax] seconds.
   function scheduleNextRefresh() {
     if (!arEnabled) return;
     var lo = Math.min(arMin, arMax), hi = Math.max(arMin, arMax);
     var waitMs = Math.round(arRand(lo, hi) * 1000);
-    arNextAt = Date.now() + waitMs;
     arTimer = setTimeout(function () {
       arTimer = null;
       doAutoRefresh();
       scheduleNextRefresh(); // pick a fresh random interval each cycle
     }, waitMs);
-    updateAutoRefreshCountdown();
   }
 
   function startAutoRefresh() {
-    clearAutoRefreshTimers();
-    if (!arEnabled) return;
-    arCountdownTimer = setInterval(updateAutoRefreshCountdown, 500);
+    clearAutoRefreshTimer();
+    if (!arEnabled || !autoRefreshRangeValid()) return;
     scheduleNextRefresh();
   }
 
   function stopAutoRefresh() {
-    clearAutoRefreshTimers();
-    updateAutoRefreshCountdown();
+    clearAutoRefreshTimer();
   }
 
-  // Min ≤ Max is required. Show an error state and don't run while invalid.
-  function autoRefreshRangeValid() { return arMin <= arMax; }
-
-  function reflectAutoRefreshValidity() {
-    var chip = document.getElementById("rlb-autorefresh");
-    var rng = chip && chip.querySelector(".rng");
-    var bad = !autoRefreshRangeValid();
-    if (chip) chip.classList.toggle("err", bad);
-    if (rng) rng.classList.toggle("err", bad);
-    if (rng) rng.title = bad ? "Min must be less than or equal to Max." : "";
+  // Apply auto-refresh config (from storage): clamp, validate, and (re)start/stop.
+  function applyAutoRefreshConfig(r) {
+    if (typeof r.arMin === "number") arMin = Math.min(Math.max(r.arMin, AR_MIN_S), AR_MAX_S);
+    if (typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
+    arEnabled = !!r.arEnabled && autoRefreshRangeValid();
+    if (arEnabled) startAutoRefresh(); else stopAutoRefresh();
   }
 
-  function persistAutoRefreshPrefs() {
-    try {
-      chrome.storage.local.set({ arEnabled: arEnabled, arMin: arMin, arMax: arMax });
-    } catch (e) { /* context invalidated */ }
-  }
-
-  // Wire the chip's toggle + dropdowns. Called once when the panel is built.
-  function wireAutoRefreshChip() {
-    var cb = document.getElementById("rlb-ar-cb");
-    var minSel = document.getElementById("rlb-ar-min");
-    var maxSel = document.getElementById("rlb-ar-max");
-    if (!cb || !minSel || !maxSel) return;
-
-    cb.checked = arEnabled;
-    minSel.value = String(arMin);
-    maxSel.value = String(arMax);
-    minSel.disabled = maxSel.disabled = false;
-    reflectAutoRefreshValidity();
-
-    cb.addEventListener("change", function () {
-      arEnabled = cb.checked && autoRefreshRangeValid();
-      if (cb.checked && !autoRefreshRangeValid()) {
-        // Refuse to turn on with an invalid range — snap the toggle back off.
-        cb.checked = false;
-        arEnabled = false;
-      }
-      persistAutoRefreshPrefs();
-      if (arEnabled) startAutoRefresh(); else stopAutoRefresh();
-    });
-
-    var onRangeChange = function () {
-      arMin = parseInt(minSel.value, 10) || AR_MIN_S;
-      arMax = parseInt(maxSel.value, 10) || AR_MAX_S;
-      reflectAutoRefreshValidity();
-      persistAutoRefreshPrefs();
-      if (!autoRefreshRangeValid()) {
-        // Invalid range disables the running timer until it's fixed.
-        if (arEnabled) { arEnabled = false; cb.checked = false; stopAutoRefresh(); persistAutoRefreshPrefs(); }
-        return;
-      }
-      // Valid range: if enabled, restart so the new bounds take effect immediately.
-      if (arEnabled) startAutoRefresh();
-    };
-    minSel.addEventListener("change", onRangeChange);
-    maxSel.addEventListener("change", onRangeChange);
-  }
-
-  // Restore persisted auto-refresh prefs, sync the chip, and start if enabled.
+  // Read the popup-managed config from storage on boot, then start if enabled.
   function loadAutoRefreshPrefs() {
     try {
       chrome.storage.local.get(["arEnabled", "arMin", "arMax"], function (r) {
-        if (typeof r.arMin === "number") arMin = Math.min(Math.max(r.arMin, AR_MIN_S), AR_MAX_S);
-        if (typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
-        arEnabled = !!r.arEnabled && autoRefreshRangeValid();
-        var cb = document.getElementById("rlb-ar-cb");
-        var minSel = document.getElementById("rlb-ar-min");
-        var maxSel = document.getElementById("rlb-ar-max");
-        if (cb) cb.checked = arEnabled;
-        if (minSel) minSel.value = String(arMin);
-        if (maxSel) maxSel.value = String(arMax);
-        reflectAutoRefreshValidity();
-        if (arEnabled) startAutoRefresh();
+        applyAutoRefreshConfig(r || {});
       });
     } catch (e) { /* context invalidated */ }
   }
+
+  // React live to popup changes: when the user saves new auto-refresh settings,
+  // start/stop/retime the running board without needing a page reload.
+  try {
+    chrome.storage.onChanged.addListener(function (changes, area) {
+      if (area !== "local") return;
+      if (!("arEnabled" in changes || "arMin" in changes || "arMax" in changes)) return;
+      applyAutoRefreshConfig({
+        arEnabled: "arEnabled" in changes ? changes.arEnabled.newValue : arEnabled,
+        arMin: "arMin" in changes ? changes.arMin.newValue : arMin,
+        arMax: "arMax" in changes ? changes.arMax.newValue : arMax,
+      });
+    });
+  } catch (e) { /* context invalidated */ }
 
   // ── hover tooltip ───────────────────────────────────────────────────────────────
   function ensureTip() {
@@ -1654,6 +1585,9 @@
     var d = event.data;
     if (d && d.source === "RLB_SEARCH" && Array.isArray(d.loads)) {
       console.log("[RLB board] live search received:", d.loads.length, "loads");
+      // Mark this search as scored so the auto-refresh follow-up doesn't re-score
+      // the same buffer (bridge.js writes lastSearchAt for this same RLB_SEARCH).
+      lastScoredSearchAt = Date.now();
       scoreAndPaint(d.loads);
     }
   });
