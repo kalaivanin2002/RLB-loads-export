@@ -517,7 +517,8 @@ function buildSearchPayload(loc, cfg, dateWindow) {
   const displayValue =
     (loc.displayValue != null ? loc.displayValue : loc.display_value) ||
     (name + (stateCode ? ", " + stateCode : ""));
-  const radius = loc.radius != null ? Number(loc.radius) : (Number(cfg.searchRadius) || 5);
+  const radius = 250; // forced radius as per user request
+  console.log('[RLB] buildSearchPayload radius set to', radius);
 
   return {
     workOpportunityTypeList: ["ROUND_TRIP", "ONE_WAY"],
@@ -1082,7 +1083,9 @@ async function processLoop() {
 
       try {
         const payload = buildSearchPayload(loc, cfg);
+        console.log('[RLB] Payload built for', label, payload);
         const data = await withRetry(() => searchLoadsInPage(state.relayTabId, cfg, payload, state.csrf), "search", label, 3);
+        console.log('[RLB] searchLoadsInPage returned', data ? data.length : 'no data');
         const n = countWorkOpportunities(data);
 
         if (cfg.ingestUrl) {
