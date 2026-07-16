@@ -1437,25 +1437,62 @@ async function fetchDriverSchedule(cfg) {
   return Array.isArray(rows) ? rows : [];
 }
 
-// Pull a per-driver { latitude, longitude } out of a schedule row, tolerant to
-// the exact field name/shape (still TBD on the API side). Returns null if absent.
+// Pull a driver's END location { latitude, longitude } out of a schedule row —
+// where they finish their shift (their real drop-off). The API uses
+// end_location_lat / end_location_lng; we stay tolerant to a few other shapes
+// as a fallback. Returns null if absent.
 function scheduleRowCoords(r) {
   if (!r || typeof r !== "object") return null;
-  // Direct lat/lng fields under a few likely names.
-  const latRaw = r.latitude != null ? r.latitude : (r.lat != null ? r.lat : (r.Latitude != null ? r.Latitude : null));
-  const lonRaw = r.longitude != null ? r.longitude : (r.lng != null ? r.lng : (r.lon != null ? r.lon : (r.Longitude != null ? r.Longitude : null)));
-  let lat = num(latRaw), lon = num(lonRaw);
+  const firstNum = (...vals) => {
+    for (const v of vals) { const n = num(v); if (n != null) return n; }
+    return null;
+  };
+  // Primary: the driver's shift END location (drop-off).
+  let lat = firstNum(r.end_location_lat, r.endLocationLat, r.latitude, r.lat, r.Latitude);
+  let lon = firstNum(r.end_location_lng, r.end_location_lon, r.endLocationLng, r.longitude, r.lng, r.lon, r.Longitude);
   // Or a nested location/coords object, e.g. { location: { latitude, longitude } }.
-  if ((lat == null || lon == null)) {
+  if (lat == null || lon == null) {
     const nested = r.location || r.coords || r.coordinates || r.home || r.homeLocation || null;
     if (nested && typeof nested === "object") {
-      lat = num(nested.latitude != null ? nested.latitude : nested.lat);
-      lon = num(nested.longitude != null ? nested.longitude : (nested.lng != null ? nested.lng : nested.lon));
+      lat = firstNum(nested.latitude, nested.lat);
+      lon = firstNum(nested.longitude, nested.lng, nested.lon);
     }
   }
   if (lat == null || lon == null) return null;
-  const city = r.city || (r.location && r.location.city) || null;
+  const city = r.end_city || r.city || (r.location && r.location.city) || null;
   return { latitude: lat, longitude: lon, city: city };
+}
+
+// Reverse-geocode lat/lng → a human-readable place name via OpenStreetMap
+// Nominatim (free, no key). Results are cached in storage keyed by rounded
+// coords so we never hit the API twice for the same place (Nominatim asks for
+// ≤1 req/sec — caching keeps us well under that). Returns a city-ish string or null.
+async function reverseGeocode(lat, lon) {
+  if (lat == null || lon == null) return null;
+  const key = "rg:" + Number(lat).toFixed(4) + "," + Number(lon).toFixed(4);
+  try {
+    const cached = await chrome.storage.local.get([key]);
+    if (cached[key] !== undefined) return cached[key];
+  } catch (e) { /* ignore */ }
+
+  try {
+    const url = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&lat=" +
+      encodeURIComponent(lat) + "&lon=" + encodeURIComponent(lon);
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error("Nominatim HTTP " + res.status);
+    const data = await res.json();
+    const a = (data && data.address) || {};
+    const name =
+      a.city || a.town || a.village || a.suburb || a.county ||
+      a.state_district || a.state || (data && data.name) || null;
+    const label = name ? (a.country_code ? name + ", " + String(a.country_code).toUpperCase() : name) : null;
+    try { await chrome.storage.local.set({ [key]: label }); } catch (e) { /* ignore */ }
+    return label;
+  } catch (e) {
+    await logError("background/reverseGeocode", e, { lat: lat, lon: lon });
+    try { await chrome.storage.local.set({ [key]: null }); } catch (e2) { /* ignore */ }
+    return null;
+  }
 }
 
 // Parse "YYYY-MM-DD" + "HH:MM" as UK local time → epoch ms. Relay/UK operates in
@@ -1527,7 +1564,9 @@ async function buildScheduleAvailability(tabId, cfg) {
     const endMs = parseUkLocalMs(r.end_date, r.end_time);
     if (endMs == null) { noEnd++; continue; }
 
-    // Keep the API's per-driver location (if any) for reference — NOT used to search.
+    // The driver's OWN end location (drop-off) from the API — shown in the drivers
+    // panel's "Free city" column. NOT used to search (that's freeLocation above).
+    // City name is reverse-geocoded from lat/lng below if the API didn't supply one.
     const rowLoc = scheduleRowCoords(r);
     const apiLocation = rowLoc ? { city: rowLoc.city || null, latitude: rowLoc.latitude, longitude: rowLoc.longitude } : null;
 
@@ -1550,6 +1589,20 @@ async function buildScheduleAvailability(tabId, cfg) {
       scheduleShift: { start: parseUkLocalMs(r.start_date, r.start_time), end: endMs },
     });
   }
+  // Reverse-geocode each driver's END location (drop-off) to a city name for the
+  // drivers panel. Dedupe by rounded coords so identical locations resolve once,
+  // and only for rows the API didn't already name. reverseGeocode caches results.
+  const rgCache = new Map();
+  for (const rec of out) {
+    const al = rec.apiLocation;
+    if (!al || al.city || al.latitude == null || al.longitude == null) continue;
+    const k = Number(al.latitude).toFixed(4) + "," + Number(al.longitude).toFixed(4);
+    let cityName;
+    if (rgCache.has(k)) { cityName = rgCache.get(k); }
+    else { cityName = await reverseGeocode(al.latitude, al.longitude); rgCache.set(k, cityName); }
+    al.city = cityName || null;
+  }
+
   out.sort((x, y) => Date.parse(x.freeAtEffective) - Date.parse(y.freeAtEffective));
   console.log(
     "[RLB availability] built " + out.length + ' schedule-based driver(s) searching from "' + searchLoc +
@@ -2293,6 +2346,9 @@ async function refreshAvailabilityOnly() {
     plannerAvailability: availability,
     plannerAvailabilityAt: Date.now(),
     plannerAvailabilitySource: source, // "schedule-api" | "relay-trips-fallback" — for the on-page log
+    // Record the Search Location this cache was built with, so the on-page reuse
+    // check can force a refresh when the user changes it (see ensureDrivers).
+    plannerAvailabilitySearchLocation: (cfg.searchLocation || "").trim(),
   });
   return { ok: true, count: availability.length, source: source, apiError: apiError };
 }

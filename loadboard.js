@@ -449,7 +449,16 @@
             var fl = a.freeLocation || {};
             var hasCoords = fl.latitude != null && fl.longitude != null && fl.city;
             var name = a.driver && a.driver.name ? a.driver.name : "(unknown)";
-            var freeCity = fl.city ? esc(fl.city) : "—";
+            // "Free city" shows the DRIVER'S OWN end location (apiLocation) — where
+            // they actually finish — not the Search Location the loads are searched
+            // from. Fall back to raw coords, then the search city, then "—".
+            var al = a.apiLocation || {};
+            var driverCity = al.city
+              ? esc(al.city)
+              : (al.latitude != null && al.longitude != null
+                  ? esc(n1(al.latitude) + ", " + n1(al.longitude))
+                  : (fl.city ? esc(fl.city) : "—"));
+            var freeCity = driverCity;
             var coordNote = hasCoords ? "" : ' <span class="sub">(no location — will be skipped)</span>';
             var whenFree = a.alreadyFree ? "now" : dtUK(a.freeAtEffective);
             var lastEnd = a.lastTripEndTime ? dtUK(a.lastTripEndTime) : "—";
@@ -1027,18 +1036,33 @@
   function loadAvailabilityMeta() {
     return new Promise(function (resolve) {
       try {
-        chrome.storage.local.get(["plannerAvailability", "plannerAvailabilityAt"], function (r) {
-          resolve({ count: (r.plannerAvailability || []).length, at: r.plannerAvailabilityAt || null });
-        });
-      } catch (e) { resolve({ count: 0, at: null }); }
+        chrome.storage.local.get(
+          ["plannerAvailability", "plannerAvailabilityAt", "plannerAvailabilitySearchLocation", "searchLocation"],
+          function (r) {
+            var cachedLoc = (r.plannerAvailabilitySearchLocation || "").trim().toLowerCase();
+            var currentLoc = (r.searchLocation || "").trim().toLowerCase();
+            resolve({
+              count: (r.plannerAvailability || []).length,
+              at: r.plannerAvailabilityAt || null,
+              // Cache is stale if it was built for a different Search Location.
+              searchLocationChanged: cachedLoc !== currentLoc,
+            });
+          }
+        );
+      } catch (e) { resolve({ count: 0, at: null, searchLocationChanged: false }); }
     });
   }
 
   // Reuse the last-fetched driver availability by default (no traffic); only fetch
-  // when there is none, or when forced via Advanced → Refresh drivers.
+  // when there is none, when forced via Advanced → Refresh drivers, or when the
+  // Search Location setting changed since the cache was built.
   function ensureDrivers(steps, force) {
     return loadAvailabilityMeta().then(function (meta) {
-      if (!force && meta.count > 0) {
+      if (meta.searchLocationChanged && meta.count > 0) {
+        console.log("[RLB board] Search Location changed since last fetch — refreshing availability.");
+      }
+      var reuse = !force && meta.count > 0 && !meta.searchLocationChanged;
+      if (reuse) {
         steps[0].state = "done";
         steps[0].label = "Using driver details (as of " + dtUK(meta.at) + ")" + (isStale(meta.at) ? " ⚠ may be old" : "");
         steps[1].state = "done"; steps[1].label = "Availability ready";

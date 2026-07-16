@@ -11,7 +11,8 @@
   "host_permissions": [
     "https://relay.amazon.co.uk/*",
     "https://relay.amazon.com/*",
-    "https://ontrack-api.agilecyber.com/*"
+    "https://ontrack-api.agilecyber.com/*",
+    "https://nominatim.openstreetmap.org/*"
   ],
   "background": {
     "service_worker": "background.js"
