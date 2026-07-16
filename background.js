@@ -18,7 +18,7 @@ importScripts("payloads.js"); // provides self.RLB_PAYLOADS (entitiesV2 request 
 
 const DEFAULTS = {
   relayBase: "https://relay.amazon.co.uk",
-  ontrackUrl: "https://ontrack-api.agilecyber.com/api/v1/rlb-locations",
+  ontrackUrl: "https://ontrack-api.agilecyber.com/api/v1/",
   ingestUrl: "",
   token: "",
   carrierCode: "", // e.g. "AMRTL" — used for the FleetYes approved-places lookup
