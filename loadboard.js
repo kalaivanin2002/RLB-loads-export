@@ -960,6 +960,13 @@
           }
           lastDriverError = null;
           driverCount = res.count || 0; driverAt = Date.now();
+          // Log which availability source ran so a silent fallback to Relay trips
+          // (instead of the shifts API) is obvious in the page console.
+          if (res.source === "relay-trips-fallback") {
+            console.warn("[RLB board] availability SOURCE = Relay trips (fallback) — shifts API failed:", res.apiError || "(no reason)");
+          } else {
+            console.log("[RLB board] availability SOURCE = " + (res.source || "schedule-api") + " — " + driverCount + " driver(s).");
+          }
           resolve(driverCount);
         });
       } catch (e) { lastDriverError = (e && e.message) || String(e); logError("refreshDriversAsync", e); resolve(0); }
@@ -984,6 +991,11 @@
           }
           lastDriverError = null;
           driverCount = res.count || 0; driverAt = Date.now();
+          if (res.source === "relay-unassigned-fallback") {
+            console.warn("[RLB board] unassigned availability SOURCE = Relay (fallback) — shifts API failed:", res.apiError || "(no reason)");
+          } else {
+            console.log("[RLB board] unassigned availability SOURCE = " + (res.source || "schedule-api") + " — " + driverCount + " driver(s).");
+          }
           resolve(driverCount);
         });
       } catch (e) { lastDriverError = (e && e.message) || String(e); logError("refreshUnassignedDriversAsync", e); resolve(0); }

@@ -1403,12 +1403,19 @@ function buildAvailability(entities, cfg) {
 // location is still parsed and kept (apiLocation) for other uses. Equipment stays
 // null (the equipment filter skips loads only when both sides are known → no filter).
 
-// Derive the shifts endpoint from the configured OnTrack base URL, the same way
-// approvedPlacesUrl does (…/api/v1/rlb-locations → …/api/v1/active-driver-shifts),
-// so there's no extra URL setting to keep in sync.
+// Derive the shifts endpoint from the configured OnTrack base URL. The setting
+// may be either the API ROOT (…/api/v1 or …/api/v1/) or a full resource URL
+// (…/api/v1/rlb-locations). We anchor on the "/api/v<N>" segment and append the
+// resource, so both forms yield …/api/v1/active-driver-shifts. Falls back to
+// stripping the last path segment if no /api/vN/ marker is present.
+function ontrackApiRoot(cfg) {
+  const raw = (cfg.ontrackUrl || "").replace(/\/+$/, ""); // drop trailing slash(es)
+  const m = raw.match(/^(.*\/api\/v\d+)(?:\/|$)/i);       // capture up to and incl. /api/vN
+  if (m) return m[1];
+  return raw.replace(/\/[^/]*$/, ""); // legacy fallback: strip last segment
+}
 function activeDriverShiftsUrl(cfg) {
-  const base = (cfg.ontrackUrl || "").replace(/\/+$/, "").replace(/\/[^/]*$/, "");
-  return base + "/active-driver-shifts";
+  return ontrackApiRoot(cfg) + "/active-driver-shifts";
 }
 
 // Fetch the carrier's active driver shifts. Uses the same auth as the other
@@ -2061,8 +2068,7 @@ async function lookupCityCoords(tabId, cfg, cityName) {
 // (…/api/v1/rlb-locations → …/api/v1/approved-places), so there's no extra URL
 // setting to keep in sync.
 function approvedPlacesUrl(cfg) {
-  const base = (cfg.ontrackUrl || "").replace(/\/+$/, "").replace(/\/[^/]*$/, "");
-  return base + "/approved-places";
+  return ontrackApiRoot(cfg) + "/approved-places";
 }
 
 // Fetch the carrier's approved places from FleetYes/OnTrack. Returns a slim list
@@ -2263,25 +2269,32 @@ async function refreshAvailabilityOnly() {
   // Primary: shifts API (active-driver-shifts). A Relay tab is still needed to
   // resolve any missing home city to coordinates via the cities endpoint.
   // Fallback: the original Relay-trips availability when the API fails.
-  let availability, source = "schedule-api";
+  let availability, source = "schedule-api", apiError = null;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
+    console.log("[RLB availability] ✓ shifts API OK — " + availability.length + " driver(s) via schedule-api.");
   } catch (e) {
     await logError("background/refreshAvailabilityOnly/schedule", e);
     // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
     if (e && e.config) return { ok: false, error: (e && e.message) || String(e) };
-    console.log("[RLB availability] shifts API failed — falling back to Relay trips:", (e && e.message) || e);
+    apiError = (e && e.message) || String(e);
+    console.warn("[RLB availability] ✗ shifts API FAILED (" + apiError + ") — falling back to Relay trips.");
+    await log("loads", "Shifts API failed (" + apiError + ") — using Relay trips instead.", "warn");
     try {
       availability = await buildRelayTripsAvailability(tab, cfg);
       source = "relay-trips-fallback";
     } catch (e2) {
       await logError("background/refreshAvailabilityOnly/fallback", e2);
-      return { ok: false, error: "Shifts API failed (" + ((e && e.message) || e) + ") and Relay-trips fallback also failed: " + ((e2 && e2.message) || e2) };
+      return { ok: false, error: "Shifts API failed (" + apiError + ") and Relay-trips fallback also failed: " + ((e2 && e2.message) || e2) };
     }
   }
-  console.log("[RLB availability] source=" + source + ", JSON:", JSON.stringify(availability, null, 2));
-  await chrome.storage.local.set({ plannerAvailability: availability, plannerAvailabilityAt: Date.now() });
-  return { ok: true, count: availability.length };
+  console.log("[RLB availability] source=" + source + ", " + availability.length + " driver(s). JSON:", JSON.stringify(availability, null, 2));
+  await chrome.storage.local.set({
+    plannerAvailability: availability,
+    plannerAvailabilityAt: Date.now(),
+    plannerAvailabilitySource: source, // "schedule-api" | "relay-trips-fallback" — for the on-page log
+  });
+  return { ok: true, count: availability.length, source: source, apiError: apiError };
 }
 
 // Unassigned-drivers-ONLY refresh, for the dedicated "Find loads for
@@ -2299,25 +2312,32 @@ async function refreshUnassignedDriversOnly() {
   // Primary: shifts API. Fallback: the original Relay unassigned-drivers flow.
   // Writes to its own storage key so the two buttons stay independent (see
   // scoreLoadsForPage, which reads plannerAvailabilityUnassigned in "unassigned" mode).
-  let availability, source = "schedule-api";
+  let availability, source = "schedule-api", apiError = null;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
+    console.log("[RLB availability] ✓ shifts API OK (unassigned) — " + availability.length + " driver(s) via schedule-api.");
   } catch (e) {
     await logError("background/refreshUnassignedDriversOnly/schedule", e);
     // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
     if (e && e.config) return { ok: false, error: (e && e.message) || String(e) };
-    console.log("[RLB availability] shifts API failed — falling back to Relay unassigned:", (e && e.message) || e);
+    apiError = (e && e.message) || String(e);
+    console.warn("[RLB availability] ✗ shifts API FAILED (" + apiError + ") — falling back to Relay unassigned.");
+    await log("loads", "Shifts API failed (" + apiError + ") — using Relay drivers instead.", "warn");
     try {
       availability = await buildRelayUnassignedAvailability(tab, cfg);
       source = "relay-unassigned-fallback";
     } catch (e2) {
       await logError("background/refreshUnassignedDriversOnly/fallback", e2);
-      return { ok: false, error: "Shifts API failed (" + ((e && e.message) || e) + ") and Relay unassigned fallback also failed: " + ((e2 && e2.message) || e2) };
+      return { ok: false, error: "Shifts API failed (" + apiError + ") and Relay unassigned fallback also failed: " + ((e2 && e2.message) || e2) };
     }
   }
-  console.log("[RLB availability] unassigned source=" + source + ", JSON:", JSON.stringify(availability, null, 2));
-  await chrome.storage.local.set({ plannerAvailabilityUnassigned: availability, plannerAvailabilityUnassignedAt: Date.now() });
-  return { ok: true, count: availability.length };
+  console.log("[RLB availability] unassigned source=" + source + ", " + availability.length + " driver(s). JSON:", JSON.stringify(availability, null, 2));
+  await chrome.storage.local.set({
+    plannerAvailabilityUnassigned: availability,
+    plannerAvailabilityUnassignedAt: Date.now(),
+    plannerAvailabilityUnassignedSource: source,
+  });
+  return { ok: true, count: availability.length, source: source, apiError: apiError };
 }
 
 // Score page-provided loads against stored availability → load-centric list
