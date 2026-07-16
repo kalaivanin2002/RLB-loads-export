@@ -821,6 +821,22 @@
     return waitFor(function () { return findRadiusOption(SEARCH_RADIUS_MI) || radiusListbox(); }, 1500, 100);
   }
 
+  // Clicking the option updates the value but (unlike a real trusted click)
+  // doesn't reliably close the popover itself — dismiss it the same way
+  // closeOverlays dismisses the origin box: Escape + blur on the combobox
+  // that owns it, then a click outside for anything that still needs it.
+  function closeRadiusPopover() {
+    try {
+      var box = radiusBox();
+      if (box) {
+        box.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+        box.blur();
+      }
+      clickOutside();
+    } catch (e) {}
+    return delay(300);
+  }
+
   // "New search" leaves Radius at Relay's default (50) — force it to
   // SEARCH_RADIUS_MI every round, same reasoning as setEquipment above.
   function setRadius() {
@@ -830,6 +846,12 @@
       if (!opt) { console.log("[RLB fill] radius option " + SEARCH_RADIUS_MI + " not found"); return; }
       realClick(opt);
       return delay(300);
+    }).then(function () {
+      return closeRadiusPopover();
+    }).then(function () {
+      if (currentRadius() !== SEARCH_RADIUS_MI) {
+        console.log("[RLB fill] radius shows " + currentRadius() + " after selecting " + SEARCH_RADIUS_MI + " — leaving as-is");
+      }
     }).catch(function (e) {
       console.log("[RLB fill] radius select failed:", e && e.message);
     });
