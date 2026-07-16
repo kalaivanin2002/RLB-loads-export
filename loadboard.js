@@ -543,10 +543,16 @@
 
   // React components often toggle on mousedown, which element.click() doesn't
   // fire — dispatch the full pointer/mouse sequence so opens/selects register.
+  // Coordinates are set to the element's own center so any coordinate-based hit
+  // testing (e.g. an "is this click inside/outside the popover" check) sees a
+  // real position rather than the (0,0) default.
   function realClick(el) {
     if (!el) return;
+    var r = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    var x = r ? r.left + r.width / 2 : 0;
+    var y = r ? r.top + r.height / 2 : 0;
     ["pointerdown", "mousedown", "mouseup", "click"].forEach(function (type) {
-      try { el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+      try { el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y })); } catch (e) {}
     });
   }
 
@@ -821,19 +827,24 @@
     return waitFor(function () { return findRadiusOption(SEARCH_RADIUS_MI) || radiusListbox(); }, 1500, 100);
   }
 
-  // Clicking the option updates the value but (unlike a real trusted click)
-  // doesn't reliably close the popover itself — dismiss it the same way
-  // closeOverlays dismisses the origin box: Escape + blur on the combobox
-  // that owns it, then a click outside for anything that still needs it.
+  // Unlike the origin/equipment popovers (which close on an outside mousedown —
+  // Escape isn't wired for any of these MDN popovers, see clickOutside above),
+  // this one is a toggle-style combobox: the box itself flips aria-expanded
+  // open/closed on click, same as it did to open it. Click it again to close;
+  // fall back to an outside click if aria-expanded says it's still open.
   function closeRadiusPopover() {
-    try {
-      var box = radiusBox();
-      if (box) {
-        box.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
-        box.blur();
-      }
-      clickOutside();
-    } catch (e) {}
+    var box = radiusBox();
+    if (box && box.getAttribute("aria-expanded") === "true") {
+      realClick(box);
+      return delay(300).then(function () {
+        var b = radiusBox();
+        if (b && b.getAttribute("aria-expanded") === "true") {
+          clickOutside();
+          return delay(300);
+        }
+      });
+    }
+    clickOutside();
     return delay(300);
   }
 
