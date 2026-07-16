@@ -26,7 +26,7 @@ const DEFAULTS = {
   letters: "abcdefghijklmnopqrstuvwxyz",
   prefix: ", ",
   delayMs: 500,
-  searchRadius: 50,
+  searchRadius: 250,
   nearbyRadius: 10,
   resultSize: 50,
   maxLocations: 2,

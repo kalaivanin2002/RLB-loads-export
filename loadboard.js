@@ -553,10 +553,16 @@
 
   // React components often toggle on mousedown, which element.click() doesn't
   // fire — dispatch the full pointer/mouse sequence so opens/selects register.
+  // Coordinates are set to the element's own center so any coordinate-based hit
+  // testing (e.g. an "is this click inside/outside the popover" check) sees a
+  // real position rather than the (0,0) default.
   function realClick(el) {
     if (!el) return;
+    var r = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    var x = r ? r.left + r.width / 2 : 0;
+    var y = r ? r.top + r.height / 2 : 0;
     ["pointerdown", "mousedown", "mouseup", "click"].forEach(function (type) {
-      try { el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+      try { el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y })); } catch (e) {}
     });
   }
 
@@ -788,6 +794,90 @@
     });
   }
 
+  // How far around the origin to search (miles). "New search" resets this to
+  // Relay's own default (50), so every round has to re-select it, same as Equipment.
+  var SEARCH_RADIUS_MI = 250;
+
+  function radiusBox() {
+    return document.getElementById("rlb-origin-radius-filter");
+  }
+  function radiusValueEl() {
+    return document.getElementById("rlb-origin-radius-filter-value");
+  }
+  function currentRadius() {
+    var el = radiusValueEl();
+    var v = el ? parseInt((el.textContent || "").trim(), 10) : NaN;
+    return isNaN(v) ? null : v;
+  }
+  function radiusListbox() {
+    var box = radiusBox();
+    var id = box && box.getAttribute("aria-controls");
+    return id ? document.getElementById(id) : null;
+  }
+  // Radius options render as plain numbers (possibly with a "mi" suffix) —
+  // read the leading integer so the exact label text doesn't matter.
+  function optionRadiusValue(opt) {
+    var t = (opt.textContent || "").replace(/\s+/g, " ").trim();
+    var m = /^(\d+)/.exec(t);
+    return m ? parseInt(m[1], 10) : null;
+  }
+  function findRadiusOption(value) {
+    var lb = radiusListbox();
+    if (!lb) return null;
+    var opts = lb.querySelectorAll('[role="option"]');
+    for (var i = 0; i < opts.length; i++) {
+      if (isVisible(opts[i]) && optionRadiusValue(opts[i]) === value) return opts[i];
+    }
+    return null;
+  }
+  function openRadius() {
+    var box = radiusBox();
+    if (!box) return Promise.reject(new Error("radius box not found"));
+    realClick(box);
+    return waitFor(function () { return findRadiusOption(SEARCH_RADIUS_MI) || radiusListbox(); }, 1500, 100);
+  }
+
+  // Unlike the origin/equipment popovers (which close on an outside mousedown —
+  // Escape isn't wired for any of these MDN popovers, see clickOutside above),
+  // this one is a toggle-style combobox: the box itself flips aria-expanded
+  // open/closed on click, same as it did to open it. Click it again to close;
+  // fall back to an outside click if aria-expanded says it's still open.
+  function closeRadiusPopover() {
+    var box = radiusBox();
+    if (box && box.getAttribute("aria-expanded") === "true") {
+      realClick(box);
+      return delay(300).then(function () {
+        var b = radiusBox();
+        if (b && b.getAttribute("aria-expanded") === "true") {
+          clickOutside();
+          return delay(300);
+        }
+      });
+    }
+    clickOutside();
+    return delay(300);
+  }
+
+  // "New search" leaves Radius at Relay's default (50) — force it to
+  // SEARCH_RADIUS_MI every round, same reasoning as setEquipment above.
+  function setRadius() {
+    if (currentRadius() === SEARCH_RADIUS_MI) return Promise.resolve(); // already correct
+    return openRadius().then(function () {
+      var opt = findRadiusOption(SEARCH_RADIUS_MI);
+      if (!opt) { console.log("[RLB fill] radius option " + SEARCH_RADIUS_MI + " not found"); return; }
+      realClick(opt);
+      return delay(300);
+    }).then(function () {
+      return closeRadiusPopover();
+    }).then(function () {
+      if (currentRadius() !== SEARCH_RADIUS_MI) {
+        console.log("[RLB fill] radius shows " + currentRadius() + " after selecting " + SEARCH_RADIUS_MI + " — leaving as-is");
+      }
+    }).catch(function (e) {
+      console.log("[RLB fill] radius select failed:", e && e.message);
+    });
+  }
+
   // Fill a batch of cities, then trigger the search once. We close the origin
   // dropdown before touching equipment (a stuck-open dropdown swallows the click),
   // and close overlays again before pressing Search loads.
@@ -900,7 +990,15 @@
       } else if (r.verified < cities.length) {
         console.log("[RLB fill] only " + r.verified + "/" + cities.length + " origin cities selected — searching with those");
       }
-      return closeOverlays(); // dismiss the origin dropdown before Equipment
+      return closeOverlays(); // dismiss the origin dropdown before Radius
+    }).then(function () {
+      // Radius before Equipment: Relay auto-fires a live search on each filter
+      // change, and Equipment is the field that actually completes the required
+      // set — setting Radius first means that auto-search already sees 250
+      // instead of firing once at the stale default (50) and again at 250.
+      return setRadius(); // New search resets radius to Relay's default; force ours
+    }).then(function () {
+      return closeOverlays(); // dismiss the radius popover before Equipment
     }).then(function () {
       return setEquipment(); // New search clears equipment; restore it or search blanks
     }).then(function () {
