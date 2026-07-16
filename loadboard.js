@@ -778,6 +778,63 @@
     });
   }
 
+  // How far around the origin to search (miles). "New search" resets this to
+  // Relay's own default (50), so every round has to re-select it, same as Equipment.
+  var SEARCH_RADIUS_MI = 250;
+
+  function radiusBox() {
+    return document.getElementById("rlb-origin-radius-filter");
+  }
+  function radiusValueEl() {
+    return document.getElementById("rlb-origin-radius-filter-value");
+  }
+  function currentRadius() {
+    var el = radiusValueEl();
+    var v = el ? parseInt((el.textContent || "").trim(), 10) : NaN;
+    return isNaN(v) ? null : v;
+  }
+  function radiusListbox() {
+    var box = radiusBox();
+    var id = box && box.getAttribute("aria-controls");
+    return id ? document.getElementById(id) : null;
+  }
+  // Radius options render as plain numbers (possibly with a "mi" suffix) —
+  // read the leading integer so the exact label text doesn't matter.
+  function optionRadiusValue(opt) {
+    var t = (opt.textContent || "").replace(/\s+/g, " ").trim();
+    var m = /^(\d+)/.exec(t);
+    return m ? parseInt(m[1], 10) : null;
+  }
+  function findRadiusOption(value) {
+    var lb = radiusListbox();
+    if (!lb) return null;
+    var opts = lb.querySelectorAll('[role="option"]');
+    for (var i = 0; i < opts.length; i++) {
+      if (isVisible(opts[i]) && optionRadiusValue(opts[i]) === value) return opts[i];
+    }
+    return null;
+  }
+  function openRadius() {
+    var box = radiusBox();
+    if (!box) return Promise.reject(new Error("radius box not found"));
+    realClick(box);
+    return waitFor(function () { return findRadiusOption(SEARCH_RADIUS_MI) || radiusListbox(); }, 1500, 100);
+  }
+
+  // "New search" leaves Radius at Relay's default (50) — force it to
+  // SEARCH_RADIUS_MI every round, same reasoning as setEquipment above.
+  function setRadius() {
+    if (currentRadius() === SEARCH_RADIUS_MI) return Promise.resolve(); // already correct
+    return openRadius().then(function () {
+      var opt = findRadiusOption(SEARCH_RADIUS_MI);
+      if (!opt) { console.log("[RLB fill] radius option " + SEARCH_RADIUS_MI + " not found"); return; }
+      realClick(opt);
+      return delay(300);
+    }).catch(function (e) {
+      console.log("[RLB fill] radius select failed:", e && e.message);
+    });
+  }
+
   // Fill a batch of cities, then trigger the search once. We close the origin
   // dropdown before touching equipment (a stuck-open dropdown swallows the click),
   // and close overlays again before pressing Search loads.
@@ -894,7 +951,11 @@
     }).then(function () {
       return setEquipment(); // New search clears equipment; restore it or search blanks
     }).then(function () {
-      return closeOverlays(); // dismiss the equipment popover before Search
+      return closeOverlays(); // dismiss the equipment popover before Radius
+    }).then(function () {
+      return setRadius(); // New search resets radius to Relay's default; force ours
+    }).then(function () {
+      return closeOverlays(); // dismiss the radius popover before Search
     }).then(function () {
       var sb = findSearchButton();
       if (sb && !sb.disabled) { realClick(sb); return delay(600); }
