@@ -16,6 +16,7 @@
   var driverAt = null;
   var onlyMyDrivers = false; // "only my driver locations" filter — hide unmatched load cards
   var lastDriverError = null; // set by refreshDriversAsync on failure, shown in the "No drivers found" card
+  var lastDriverErrorConfig = false; // true when lastDriverError is a config problem (missing settings)
   var tip = null;
   var observer = null;
   var scheduled = false;
@@ -964,10 +965,12 @@
             var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unknown failure";
             logError("refreshDriversAsync", msg);
             lastDriverError = msg;
+            lastDriverErrorConfig = !!(res && res.config);
             resolve(0);
             return;
           }
           lastDriverError = null;
+          lastDriverErrorConfig = false;
           driverCount = res.count || 0; driverAt = Date.now();
           // Log which availability source ran so a silent fallback to Relay trips
           // (instead of the shifts API) is obvious in the page console.
@@ -1094,8 +1097,14 @@
 
     ensureDrivers(steps, force === true).then(function (meta) {
       if (!meta || !meta.count) {
-        var reason = lastDriverError ? ("Reason: " + lastDriverError + ". ") : "";
-        cardError("No drivers found.", reason + "Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers.");
+        if (lastDriverErrorConfig) {
+          // Missing settings (carrier code / token / search location) — point the
+          // user straight at settings, not the Trips page.
+          cardError("Setup needed", lastDriverError + " Open the extension popup to configure it, then try again.");
+        } else {
+          var reason = lastDriverError ? ("Reason: " + lastDriverError + ". ") : "";
+          cardError("No drivers found.", reason + "Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers.");
+        }
         return null;
       }
       driverCount = meta.count; driverAt = meta.at;

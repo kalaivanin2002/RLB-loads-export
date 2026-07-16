@@ -89,16 +89,6 @@
         <input id="carrierCode" type="text" placeholder="e.g. AMRTL" />
         <small class="field-hint">Your carrier code, used for the FleetYes approved-places lookup (unassigned drivers).</small>
       </label>
-      <label class="field check">
-        <input id="useFleetyesPlaces" type="checkbox" />
-        <span>Use FleetYes places for unassigned drivers</span>
-        <small class="field-hint">On: unassigned drivers are searched from your FleetYes approved places (by city). Off: their Relay home domicile.</small>
-      </label>
-      <label class="field">
-        <span>Relay base URL</span>
-        <input id="relayBase" type="text" placeholder="https://relay.amazon.co.uk" />
-        <small class="field-hint">Your Amazon Relay site (e.g. .co.uk for UK). Must match the tab you're logged into.</small>
-      </label>
       <div class="settings-title">Auto-refresh loads</div>
       <label class="field check">
         <input id="arEnabled" type="checkbox" />
@@ -119,6 +109,16 @@
       </div>
       <small id="arError" class="field-hint" style="color:#dc2626;display:none;">Min must be less than or equal to Max.</small>
 
+      <label class="field check">
+        <input id="useFleetyesPlaces" type="checkbox" />
+        <span>Use FleetYes places for unassigned drivers</span>
+        <small class="field-hint">On: unassigned drivers are searched from your FleetYes approved places (by city). Off: their Relay home domicile.</small>
+      </label>
+      <label class="field">
+        <span>Relay base URL</span>
+        <input id="relayBase" type="text" placeholder="https://relay.amazon.co.uk" />
+        <small class="field-hint">Your Amazon Relay site (e.g. .co.uk for UK). Must match the tab you're logged into.</small>
+      </label>
       <div class="settings-title">Scoring weights (relative)</div>
       <div class="field-row">
         <label class="field">
