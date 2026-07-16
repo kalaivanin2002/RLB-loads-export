@@ -18,7 +18,7 @@ importScripts("payloads.js"); // provides self.RLB_PAYLOADS (entitiesV2 request 
 
 const DEFAULTS = {
   relayBase: "https://relay.amazon.co.uk",
-  ontrackUrl: "https://ontrack-api.agilecyber.com/api/v1/rlb-locations",
+  ontrackUrl: "https://ontrack-api.agilecyber.com/api/v1/",
   ingestUrl: "",
   token: "",
   carrierCode: "", // e.g. "AMRTL" — used for the FleetYes approved-places lookup
@@ -32,6 +32,7 @@ const DEFAULTS = {
   maxLocations: 2,
   minTripMiles: 25,
   topLoads: 30,
+  searchLocation: "", // the city all scheduled drivers are searched FROM (Planning rules)
   // Planner timing rules (hours).
   restHours: 0, // rest after finishing a trip before the driver is available
   availabilityLeadHours: 2, // treat a driver as free this long before the trip ends (earliest pickup = tripEnd − this)
@@ -1394,22 +1395,104 @@ function buildAvailability(entities, cfg) {
   return out;
 }
 
-// ── schedule-based availability (driver_schedule.json) ───────────────────────
-// Availability now comes from a shift schedule API instead of Relay trips. Each
+// ── schedule-based availability (active-driver-shifts API) ───────────────────
+// Availability comes from the shift schedule API instead of Relay trips. Each
 // driver has a shift window (working hours); they're FREE AFTER the shift ends.
-// The schedule carries no location/equipment, so for now every driver is placed
-// at one static home base (SCHEDULE_HOME_CITY) — this will later come from
-// per-driver localStorage (a separate task). Equipment stays null (the equipment
-// filter already skips loads only when both sides are known, so null = no filter).
-const SCHEDULE_URL = chrome.runtime.getURL("driver_schedule.json");
-const SCHEDULE_HOME_CITY = "Darlington, UK"; // temporary single home base for all drivers
+// All drivers are searched FROM one configured Search Location (cfg.searchLocation,
+// set in Planning rules) — not the driver's own location. The API's per-driver
+// location is still parsed and kept (apiLocation) for other uses. Equipment stays
+// null (the equipment filter skips loads only when both sides are known → no filter).
 
-async function fetchDriverSchedule() {
-  const res = await fetch(SCHEDULE_URL, { headers: { Accept: "application/json" } });
-  if (!res.ok) throw new Error("driver_schedule HTTP " + res.status);
-  const data = await res.json();
-  const rows = Array.isArray(data && data.drivers) ? data.drivers : [];
-  return rows;
+// Derive the shifts endpoint from the configured OnTrack base URL. The setting
+// may be either the API ROOT (…/api/v1 or …/api/v1/) or a full resource URL
+// (…/api/v1/rlb-locations). We anchor on the "/api/v<N>" segment and append the
+// resource, so both forms yield …/api/v1/active-driver-shifts. Falls back to
+// stripping the last path segment if no /api/vN/ marker is present.
+function ontrackApiRoot(cfg) {
+  const raw = (cfg.ontrackUrl || "").replace(/\/+$/, ""); // drop trailing slash(es)
+  const m = raw.match(/^(.*\/api\/v\d+)(?:\/|$)/i);       // capture up to and incl. /api/vN
+  if (m) return m[1];
+  return raw.replace(/\/[^/]*$/, ""); // legacy fallback: strip last segment
+}
+function activeDriverShiftsUrl(cfg) {
+  return ontrackApiRoot(cfg) + "/active-driver-shifts";
+}
+
+// Fetch the carrier's active driver shifts. Uses the same auth as the other
+// OnTrack/FleetYes calls (carrier_code query + Bearer token from settings).
+async function fetchDriverSchedule(cfg) {
+  if (!cfg.carrierCode) throw new Error("No carrier_code set (Developer settings).");
+  const url = activeDriverShiftsUrl(cfg) + "?carrier_code=" + encodeURIComponent(cfg.carrierCode);
+  const res = await fetch(url, { headers: { Accept: "application/json", Authorization: "Bearer " + cfg.token } });
+  const text = await res.text();
+  if (!res.ok) {
+    const err = new Error("active-driver-shifts HTTP " + res.status + ": " + text.slice(0, 200));
+    await logError("background/fetchDriverSchedule", err, { url: url, status: res.status });
+    throw err;
+  }
+  let data;
+  try { data = JSON.parse(text); } catch (e) { throw new Error("active-driver-shifts response was not JSON"); }
+  // Tolerant to the top-level array key (drivers / shifts / data / …).
+  const rows = extractEntries(data);
+  return Array.isArray(rows) ? rows : [];
+}
+
+// Pull a driver's END location { latitude, longitude } out of a schedule row —
+// where they finish their shift (their real drop-off). The API uses
+// end_location_lat / end_location_lng; we stay tolerant to a few other shapes
+// as a fallback. Returns null if absent.
+function scheduleRowCoords(r) {
+  if (!r || typeof r !== "object") return null;
+  const firstNum = (...vals) => {
+    for (const v of vals) { const n = num(v); if (n != null) return n; }
+    return null;
+  };
+  // Primary: the driver's shift END location (drop-off).
+  let lat = firstNum(r.end_location_lat, r.endLocationLat, r.latitude, r.lat, r.Latitude);
+  let lon = firstNum(r.end_location_lng, r.end_location_lon, r.endLocationLng, r.longitude, r.lng, r.lon, r.Longitude);
+  // Or a nested location/coords object, e.g. { location: { latitude, longitude } }.
+  if (lat == null || lon == null) {
+    const nested = r.location || r.coords || r.coordinates || r.home || r.homeLocation || null;
+    if (nested && typeof nested === "object") {
+      lat = firstNum(nested.latitude, nested.lat);
+      lon = firstNum(nested.longitude, nested.lng, nested.lon);
+    }
+  }
+  if (lat == null || lon == null) return null;
+  const city = r.end_city || r.city || (r.location && r.location.city) || null;
+  return { latitude: lat, longitude: lon, city: city };
+}
+
+// Reverse-geocode lat/lng → a human-readable place name via OpenStreetMap
+// Nominatim (free, no key). Results are cached in storage keyed by rounded
+// coords so we never hit the API twice for the same place (Nominatim asks for
+// ≤1 req/sec — caching keeps us well under that). Returns a city-ish string or null.
+async function reverseGeocode(lat, lon) {
+  if (lat == null || lon == null) return null;
+  const key = "rg:" + Number(lat).toFixed(4) + "," + Number(lon).toFixed(4);
+  try {
+    const cached = await chrome.storage.local.get([key]);
+    if (cached[key] !== undefined) return cached[key];
+  } catch (e) { /* ignore */ }
+
+  try {
+    const url = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&lat=" +
+      encodeURIComponent(lat) + "&lon=" + encodeURIComponent(lon);
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error("Nominatim HTTP " + res.status);
+    const data = await res.json();
+    const a = (data && data.address) || {};
+    const name =
+      a.city || a.town || a.village || a.suburb || a.county ||
+      a.state_district || a.state || (data && data.name) || null;
+    const label = name ? (a.country_code ? name + ", " + String(a.country_code).toUpperCase() : name) : null;
+    try { await chrome.storage.local.set({ [key]: label }); } catch (e) { /* ignore */ }
+    return label;
+  } catch (e) {
+    await logError("background/reverseGeocode", e, { lat: lat, lon: lon });
+    try { await chrome.storage.local.set({ [key]: null }); } catch (e2) { /* ignore */ }
+    return null;
+  }
 }
 
 // Parse "YYYY-MM-DD" + "HH:MM" as UK local time → epoch ms. Relay/UK operates in
@@ -1446,17 +1529,32 @@ function londonOffsetMinutes(ms) {
   }
 }
 
-// Build availability records from the schedule. tabId is used only to resolve the
-// static home city to coordinates (via the Relay cities endpoint) — no trips read.
+// Build availability records from the shifts API. Every scheduled driver is
+// searched FROM the single configured Search Location (cfg.searchLocation, set in
+// Planning rules) — this is the freeLocation the load search/scoring uses. The
+// API's own per-driver location is still parsed and kept (apiLocation) for other
+// purposes, but is NOT used for the search. tabId resolves the Search Location
+// city to coordinates via the Relay cities endpoint — no trips are read.
 async function buildScheduleAvailability(tabId, cfg) {
-  const rows = await fetchDriverSchedule();
+  const rows = await fetchDriverSchedule(cfg);
   const now = Date.now();
-  const homeCoords = await lookupCityCoords(tabId, cfg, SCHEDULE_HOME_CITY);
-  if (!homeCoords) throw new Error('Could not resolve home city "' + SCHEDULE_HOME_CITY + '" to coordinates.');
-  const freeLocation = {
-    city: homeCoords.name, country: homeCoords.country || null,
-    latitude: homeCoords.latitude, longitude: homeCoords.longitude,
-  };
+
+  // The Search Location is required — with no place to search from, nothing can
+  // be scored. These are CONFIG errors (config: true) so the caller surfaces them
+  // directly to the user instead of quietly falling back to Relay trips.
+  const searchLoc = (cfg.searchLocation || "").trim();
+  if (!searchLoc) {
+    const err = new Error("No Search Location set — enter one in Planning rules (settings).");
+    err.config = true;
+    throw err;
+  }
+  const c = await lookupCityCoords(tabId, cfg, searchLoc);
+  if (!c) {
+    const err = new Error('Could not resolve Search Location "' + searchLoc + '" to coordinates.');
+    err.config = true;
+    throw err;
+  }
+  const freeLocation = { city: c.name, country: c.country || null, latitude: c.latitude, longitude: c.longitude };
 
   const out = [];
   let noEnd = 0;
@@ -1465,6 +1563,13 @@ async function buildScheduleAvailability(tabId, cfg) {
     if (!name) continue;
     const endMs = parseUkLocalMs(r.end_date, r.end_time);
     if (endMs == null) { noEnd++; continue; }
+
+    // The driver's OWN end location (drop-off) from the API — shown in the drivers
+    // panel's "Free city" column. NOT used to search (that's freeLocation above).
+    // City name is reverse-geocoded from lat/lng below if the API didn't supply one.
+    const rowLoc = scheduleRowCoords(r);
+    const apiLocation = rowLoc ? { city: rowLoc.city || null, latitude: rowLoc.latitude, longitude: rowLoc.longitude } : null;
+
     // Free AFTER the shift ends. If the shift already ended, they're free now.
     const effFreeStart = Math.max(endMs, 0);
     out.push({
@@ -1472,7 +1577,8 @@ async function buildScheduleAvailability(tabId, cfg) {
       lastTripId: null,
       lastTripState: null,
       lastTripEndTime: new Date(endMs).toISOString(),
-      freeLocation: freeLocation,
+      freeLocation: freeLocation, // search FROM the configured Search Location
+      apiLocation: apiLocation,   // the driver's own location from the API (kept, unused for search)
       domicile: null,
       equipment: null,
       freeAt: effFreeStart > now ? new Date(effFreeStart).toISOString() : null,
@@ -1483,8 +1589,25 @@ async function buildScheduleAvailability(tabId, cfg) {
       scheduleShift: { start: parseUkLocalMs(r.start_date, r.start_time), end: endMs },
     });
   }
+  // Reverse-geocode each driver's END location (drop-off) to a city name for the
+  // drivers panel. Dedupe by rounded coords so identical locations resolve once,
+  // and only for rows the API didn't already name. reverseGeocode caches results.
+  const rgCache = new Map();
+  for (const rec of out) {
+    const al = rec.apiLocation;
+    if (!al || al.city || al.latitude == null || al.longitude == null) continue;
+    const k = Number(al.latitude).toFixed(4) + "," + Number(al.longitude).toFixed(4);
+    let cityName;
+    if (rgCache.has(k)) { cityName = rgCache.get(k); }
+    else { cityName = await reverseGeocode(al.latitude, al.longitude); rgCache.set(k, cityName); }
+    al.city = cityName || null;
+  }
+
   out.sort((x, y) => Date.parse(x.freeAtEffective) - Date.parse(y.freeAtEffective));
-  console.log("[RLB availability] built " + out.length + " schedule-based driver(s); dropped " + noEnd + " (no/invalid shift end).");
+  console.log(
+    "[RLB availability] built " + out.length + ' schedule-based driver(s) searching from "' + searchLoc +
+    '"; dropped ' + noEnd + " (no/invalid shift end)."
+  );
   return out;
 }
 
@@ -1998,8 +2121,7 @@ async function lookupCityCoords(tabId, cfg, cityName) {
 // (…/api/v1/rlb-locations → …/api/v1/approved-places), so there's no extra URL
 // setting to keep in sync.
 function approvedPlacesUrl(cfg) {
-  const base = (cfg.ontrackUrl || "").replace(/\/+$/, "").replace(/\/[^/]*$/, "");
-  return base + "/approved-places";
+  return ontrackApiRoot(cfg) + "/approved-places";
 }
 
 // Fetch the carrier's approved places from FleetYes/OnTrack. Returns a slim list
@@ -2132,23 +2254,103 @@ async function buildUnassignedDriverAvailability(tabId, cfg, allDrivers, assigne
   return out;
 }
 
+// ── FALLBACK: original Relay-trips availability ──────────────────────────────
+// Used only when the shifts API fails. Builds the merged trip-based + unassigned
+// availability exactly as the extension did before the schedule API was added.
+async function buildRelayTripsAvailability(tab, cfg) {
+  const csrf = await resolveCsrf(tab.id);
+  if (!csrf) throw new Error("No CSRF token — reload the Relay tab.");
+  let inTransit, upcoming;
+  try {
+    inTransit = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.inTransit);
+  } catch (e) {
+    throw new Error(describeFetchEntitiesError(e, "in-transit"));
+  }
+  try {
+    upcoming = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.upcoming);
+  } catch (e) {
+    throw new Error(describeFetchEntitiesError(e, "upcoming"));
+  }
+  const entities = inTransit.concat(upcoming);
+  const availability = buildAvailability(entities, cfg);
+  console.log("[RLB availability] FALLBACK built " + availability.length + " trip-based driver(s).");
+
+  // Fold in unassigned drivers too — non-fatal if this leg fails.
+  let combined = availability;
+  try {
+    const allDrivers = await fetchAllDrivers(tab.id, cfg);
+    const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
+    console.log("[RLB availability] FALLBACK " + unassigned.length + " unassigned driver(s).");
+    combined = availability.concat(unassigned);
+  } catch (e) {
+    await logError("background/buildRelayTripsAvailability/unassignedDrivers", e);
+  }
+  return combined;
+}
+
+// ── FALLBACK: original Relay unassigned-only availability ────────────────────
+async function buildRelayUnassignedAvailability(tab, cfg) {
+  const csrf = await resolveCsrf(tab.id);
+  if (!csrf) throw new Error("No CSRF token — reload the Relay tab.");
+  let inTransit, upcoming;
+  try {
+    inTransit = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.inTransit);
+  } catch (e) {
+    throw new Error(describeFetchEntitiesError(e, "in-transit"));
+  }
+  try {
+    upcoming = await fetchEntitiesFresh(tab.id, cfg, csrf, self.RLB_PAYLOADS.upcoming);
+  } catch (e) {
+    throw new Error(describeFetchEntitiesError(e, "upcoming"));
+  }
+  const entities = inTransit.concat(upcoming);
+  let allDrivers;
+  try {
+    allDrivers = await fetchAllDrivers(tab.id, cfg);
+  } catch (e) {
+    throw new Error("Couldn't fetch the drivers list: " + ((e && e.message) || e));
+  }
+  const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
+  console.log("[RLB availability] FALLBACK unassigned-only — " + unassigned.length + " driver(s).");
+  return unassigned;
+}
+
 async function refreshAvailabilityOnly() {
   const cfg = await getConfig();
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
-  // Availability now comes from the shift schedule (driver_schedule.json), not
-  // Relay trips. A Relay tab is still needed to resolve the home city to
-  // coordinates via the cities endpoint.
-  let availability;
+  // Primary: shifts API (active-driver-shifts). A Relay tab is still needed to
+  // resolve any missing home city to coordinates via the cities endpoint.
+  // Fallback: the original Relay-trips availability when the API fails.
+  let availability, source = "schedule-api", apiError = null;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
+    console.log("[RLB availability] ✓ shifts API OK — " + availability.length + " driver(s) via schedule-api.");
   } catch (e) {
     await logError("background/refreshAvailabilityOnly/schedule", e);
-    return { ok: false, error: "Couldn't build schedule availability: " + ((e && e.message) || e) };
+    // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
+    if (e && e.config) return { ok: false, error: (e && e.message) || String(e) };
+    apiError = (e && e.message) || String(e);
+    console.warn("[RLB availability] ✗ shifts API FAILED (" + apiError + ") — falling back to Relay trips.");
+    await log("loads", "Shifts API failed (" + apiError + ") — using Relay trips instead.", "warn");
+    try {
+      availability = await buildRelayTripsAvailability(tab, cfg);
+      source = "relay-trips-fallback";
+    } catch (e2) {
+      await logError("background/refreshAvailabilityOnly/fallback", e2);
+      return { ok: false, error: "Shifts API failed (" + apiError + ") and Relay-trips fallback also failed: " + ((e2 && e2.message) || e2) };
+    }
   }
-  console.log("[RLB availability] JSON:", JSON.stringify(availability, null, 2));
-  await chrome.storage.local.set({ plannerAvailability: availability, plannerAvailabilityAt: Date.now() });
-  return { ok: true, count: availability.length };
+  console.log("[RLB availability] source=" + source + ", " + availability.length + " driver(s). JSON:", JSON.stringify(availability, null, 2));
+  await chrome.storage.local.set({
+    plannerAvailability: availability,
+    plannerAvailabilityAt: Date.now(),
+    plannerAvailabilitySource: source, // "schedule-api" | "relay-trips-fallback" — for the on-page log
+    // Record the Search Location this cache was built with, so the on-page reuse
+    // check can force a refresh when the user changes it (see ensureDrivers).
+    plannerAvailabilitySearchLocation: (cfg.searchLocation || "").trim(),
+  });
+  return { ok: true, count: availability.length, source: source, apiError: apiError };
 }
 
 // Unassigned-drivers-ONLY refresh, for the dedicated "Find loads for
@@ -2163,19 +2365,35 @@ async function refreshUnassignedDriversOnly() {
   const cfg = await getConfig();
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
-  // Both launcher flows now source from the shift schedule. This flow writes to
-  // its own storage key so the two buttons stay independent (see scoreLoadsForPage,
-  // which reads plannerAvailabilityUnassigned in "unassigned" mode).
-  let availability;
+  // Primary: shifts API. Fallback: the original Relay unassigned-drivers flow.
+  // Writes to its own storage key so the two buttons stay independent (see
+  // scoreLoadsForPage, which reads plannerAvailabilityUnassigned in "unassigned" mode).
+  let availability, source = "schedule-api", apiError = null;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
+    console.log("[RLB availability] ✓ shifts API OK (unassigned) — " + availability.length + " driver(s) via schedule-api.");
   } catch (e) {
     await logError("background/refreshUnassignedDriversOnly/schedule", e);
-    return { ok: false, error: "Couldn't build schedule availability: " + ((e && e.message) || e) };
+    // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
+    if (e && e.config) return { ok: false, error: (e && e.message) || String(e) };
+    apiError = (e && e.message) || String(e);
+    console.warn("[RLB availability] ✗ shifts API FAILED (" + apiError + ") — falling back to Relay unassigned.");
+    await log("loads", "Shifts API failed (" + apiError + ") — using Relay drivers instead.", "warn");
+    try {
+      availability = await buildRelayUnassignedAvailability(tab, cfg);
+      source = "relay-unassigned-fallback";
+    } catch (e2) {
+      await logError("background/refreshUnassignedDriversOnly/fallback", e2);
+      return { ok: false, error: "Shifts API failed (" + apiError + ") and Relay unassigned fallback also failed: " + ((e2 && e2.message) || e2) };
+    }
   }
-  console.log("[RLB availability] unassigned (schedule) JSON:", JSON.stringify(availability, null, 2));
-  await chrome.storage.local.set({ plannerAvailabilityUnassigned: availability, plannerAvailabilityUnassignedAt: Date.now() });
-  return { ok: true, count: availability.length };
+  console.log("[RLB availability] unassigned source=" + source + ", " + availability.length + " driver(s). JSON:", JSON.stringify(availability, null, 2));
+  await chrome.storage.local.set({
+    plannerAvailabilityUnassigned: availability,
+    plannerAvailabilityUnassignedAt: Date.now(),
+    plannerAvailabilityUnassignedSource: source,
+  });
+  return { ok: true, count: availability.length, source: source, apiError: apiError };
 }
 
 // Score page-provided loads against stored availability → load-centric list

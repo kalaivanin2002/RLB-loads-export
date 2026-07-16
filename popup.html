@@ -14,6 +14,11 @@
     <!-- Planning rules: the scoring / feasibility knobs the on-page ⚡ workflow uses. -->
     <button id="toggleAdmin" class="disclosure" type="button">Planning rules ▾</button>
     <div id="adminSettings" class="settings hidden">
+      <label class="field">
+        <span>Search location</span>
+        <input id="searchLocation" type="text" placeholder="e.g. Darlington, UK" />
+        <small class="field-hint">The city all drivers' loads are searched from. Required — leave nothing here and searches won't run.</small>
+      </label>
       <div class="field-row">
         <label class="field">
           <span>Max pickup distance (mi)</span>
