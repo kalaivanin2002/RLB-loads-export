@@ -12,6 +12,8 @@
     "https://relay.amazon.co.uk/*",
     "https://relay.amazon.com/*",
     "https://ontrack-api.agilecyber.com/*",
+    "https://afp-api.fleetyes.com/*",
+    "https://rsp-api.fleetyes.com/*",
     "https://nominatim.openstreetmap.org/*"
   ],
   "background": {
