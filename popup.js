@@ -30,6 +30,7 @@
     token: "",
     carrierCode: "",
     useFleetyesPlaces: false,
+    homeCity: "Darlington, UK",
     nearbyRadius: 10,
     minTripMiles: 25,
     restHours: 0,
@@ -63,6 +64,7 @@
     carrierCode: $("carrierCode"),
     useFleetyesPlaces: $("useFleetyesPlaces"),
     relayBase: $("relayBase"),
+    homeCity: $("homeCity"),
     nearbyRadius: $("nearbyRadius"),
     minTripMiles: $("minTripMiles"),
     restHours: $("restHours"),
@@ -112,6 +114,7 @@
       els.carrierCode.value = cfg.carrierCode || "";
       els.useFleetyesPlaces.checked = cfg.useFleetyesPlaces === true;
       els.relayBase.value = cfg.relayBase;
+      els.homeCity.value = cfg.homeCity;
       els.nearbyRadius.value = cfg.nearbyRadius;
       els.minTripMiles.value = cfg.minTripMiles;
       els.restHours.value = cfg.restHours;
@@ -170,6 +173,7 @@
       token: els.token.value.trim(),
       carrierCode: els.carrierCode.value.trim(),
       useFleetyesPlaces: els.useFleetyesPlaces.checked,
+      homeCity: els.homeCity.value.trim() || DEFAULTS.homeCity,
       nearbyRadius: intField(els.nearbyRadius, DEFAULTS.nearbyRadius),
       minTripMiles: intField(els.minTripMiles, DEFAULTS.minTripMiles),
       restHours: numField(els.restHours, DEFAULTS.restHours),

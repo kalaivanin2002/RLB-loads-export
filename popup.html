@@ -14,6 +14,11 @@
     <!-- Planning rules: the scoring / feasibility knobs the on-page ⚡ workflow uses. -->
     <button id="toggleAdmin" class="disclosure" type="button">Planning rules ▾</button>
     <div id="adminSettings" class="settings hidden">
+      <label class="field">
+        <span>Home base city</span>
+        <input id="homeCity" type="text" placeholder="Darlington, UK" />
+        <small class="field-hint">Used as the driver's location for schedule-based availability (the schedule itself has no location). Searches use this to find loads.</small>
+      </label>
       <div class="field-row">
         <label class="field">
           <span>Max pickup distance (mi)</span>

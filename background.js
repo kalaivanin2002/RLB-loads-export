@@ -39,6 +39,7 @@ const DEFAULTS = {
   gapBeforeNextHours: 2, // load must deliver this long before the next booked trip
   deadheadMph: 30, // effective speed over straight-line deadhead miles (road-time check)
   matchEquipment: true, // only recommend loads whose trailer matches the driver's
+  homeCity: "Darlington, UK", // schedule-based availability: home base used when the schedule has no location
   // Planner scoring weights (relative; need not sum to 1).
   weightPayout: 0.4,
   weightRate: 0.25,
@@ -1398,11 +1399,11 @@ function buildAvailability(entities, cfg) {
 // Availability now comes from a shift schedule API instead of Relay trips. Each
 // driver has a shift window (working hours); they're FREE AFTER the shift ends.
 // The schedule carries no location/equipment, so for now every driver is placed
-// at one static home base (SCHEDULE_HOME_CITY) — this will later come from
-// per-driver localStorage (a separate task). Equipment stays null (the equipment
-// filter already skips loads only when both sides are known, so null = no filter).
+// at one static home base (cfg.homeCity, set in Planning rules) — this will later
+// come from per-driver localStorage (a separate task). Equipment stays null (the
+// equipment filter already skips loads only when both sides are known, so null =
+// no filter).
 const SCHEDULE_URL = chrome.runtime.getURL("driver_schedule.json");
-const SCHEDULE_HOME_CITY = "Darlington, UK"; // temporary single home base for all drivers
 
 async function fetchDriverSchedule() {
   const res = await fetch(SCHEDULE_URL, { headers: { Accept: "application/json" } });
@@ -1451,8 +1452,9 @@ function londonOffsetMinutes(ms) {
 async function buildScheduleAvailability(tabId, cfg) {
   const rows = await fetchDriverSchedule();
   const now = Date.now();
-  const homeCoords = await lookupCityCoords(tabId, cfg, SCHEDULE_HOME_CITY);
-  if (!homeCoords) throw new Error('Could not resolve home city "' + SCHEDULE_HOME_CITY + '" to coordinates.');
+  const homeCity = (cfg && cfg.homeCity && cfg.homeCity.trim()) || DEFAULTS.homeCity;
+  const homeCoords = await lookupCityCoords(tabId, cfg, homeCity);
+  if (!homeCoords) throw new Error('Could not resolve home city "' + homeCity + '" to coordinates.');
   const freeLocation = {
     city: homeCoords.name, country: homeCoords.country || null,
     latitude: homeCoords.latitude, longitude: homeCoords.longitude,
