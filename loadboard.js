@@ -514,6 +514,7 @@
   var batches = [];   // [[{city,country}], [{city,country}], …] — one city per round
   var roundIdx = 0;
   var autofillBusy = false;
+  var WIDE_RADIUS_MILES = 250; // widen Relay's default search radius (see setSearchRadius)
   var lastMode = "all"; // "all" (runAutopilot) or "unassigned" (runUnassignedDriversAutopilot) — which one Advanced → Refresh drivers should re-run
 
   var delay = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
@@ -870,6 +871,48 @@
     });
   }
 
+  // Best-effort only: if Relay's search form exposes a distance/radius toggle
+  // near Origin (commonly a compact control showing e.g. "50 mi"), bump it to
+  // WIDE_RADIUS_MILES. Never throws and never blocks the rest of the fill —
+  // if the control can't be found or opened, the round just runs at Relay's
+  // own default radius (logged, not fatal).
+  function findRadiusToggle() {
+    var els = document.querySelectorAll("button,[role='button'],[role='combobox']");
+    for (var i = 0; i < els.length; i++) {
+      if (!isVisible(els[i])) continue;
+      var t = (els[i].textContent || "").replace(/\s+/g, " ").trim();
+      if (/^\d{1,4}\s*mi(les)?\.?$/i.test(t)) return els[i];
+    }
+    return null;
+  }
+  function findRadiusOption(miles) {
+    var re = new RegExp("^" + miles + "\\s*mi(les)?\\.?$", "i");
+    var opts = document.querySelectorAll('[role="option"],[role="menuitem"],li');
+    for (var i = 0; i < opts.length; i++) {
+      if (!isVisible(opts[i])) continue;
+      var t = (opts[i].textContent || "").replace(/\s+/g, " ").trim();
+      if (re.test(t)) return opts[i];
+    }
+    return null;
+  }
+  function setSearchRadius(miles) {
+    var toggle = findRadiusToggle();
+    if (!toggle) {
+      console.log("[RLB fill] radius control not found — using Relay's default radius");
+      return delay(0);
+    }
+    var current = (toggle.textContent || "").match(/\d+/);
+    if (current && Number(current[0]) === miles) return delay(0); // already set
+    realClick(toggle);
+    return waitFor(function () { return findRadiusOption(miles); }, 1500, 120).then(function (opt) {
+      realClick(opt);
+      return delay(300);
+    }, function () {
+      console.log("[RLB fill] radius option '" + miles + " mi' not offered after opening the control — leaving default");
+      return closeOverlays();
+    });
+  }
+
   function fillBatch(cities) {
     return fillOrigins(cities).then(function (r) {
       if (r.verified > 0) return r;
@@ -890,7 +933,9 @@
       } else if (r.verified < cities.length) {
         console.log("[RLB fill] only " + r.verified + "/" + cities.length + " origin cities selected — searching with those");
       }
-      return closeOverlays(); // dismiss the origin dropdown before Equipment
+      return setSearchRadius(WIDE_RADIUS_MILES);
+    }).then(function () {
+      return closeOverlays(); // dismiss the origin dropdown (and any radius popover) before Equipment
     }).then(function () {
       return setEquipment(); // New search clears equipment; restore it or search blanks
     }).then(function () {
@@ -907,7 +952,9 @@
     });
   }
 
-  // Dedupe drivers down to their unique drop-off cities, soonest-free first —
+  // FALLBACK location source for "Find my best loads" — only used when no
+  // organisation location is configured/available (see getOrgLocations).
+  // Dedupes drivers down to their unique drop-off cities, soonest-free first —
   // one entry per city, one round per entry.
   function buildCityList(list) {
     var byCity = {};
@@ -1002,6 +1049,34 @@
     });
   }
 
+  // Organisation location(s) — the carrier's FleetYes approved places (the
+  // same source already used for unassigned drivers). This is the PRIMARY
+  // search origin for "Find my best loads"; buildCityList/getAvailability
+  // (per-driver drop-off city) is the FALLBACK, used only when this resolves
+  // to nothing (no carrier code configured, API error, or an empty list).
+  // Never rejects — any failure just means "use the fallback".
+  function getOrgLocations() {
+    return new Promise(function (resolve) {
+      try {
+        chrome.runtime.sendMessage({ type: "get-org-locations" }, function (res) {
+          if (chrome.runtime.lastError || !res || !res.ok || !Array.isArray(res.places)) {
+            var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unavailable";
+            console.log("[RLB fill] organisation location unavailable (" + msg + ") — falling back to driver drop-off cities");
+            resolve([]);
+            return;
+          }
+          var byCity = {};
+          res.places.forEach(function (p) {
+            if (!p || !p.city) return; // no city name — can't type it into the origin box
+            var key = String(p.city).toLowerCase().trim();
+            if (!byCity[key]) byCity[key] = { city: p.city, country: null };
+          });
+          resolve(Object.keys(byCity).map(function (k) { return byCity[k]; }));
+        });
+      } catch (e) { logError("getOrgLocations", e); resolve([]); }
+    });
+  }
+
   // Steps shown while a round's fetch/search/match sequence runs.
   function autopilotSteps(fromSearch) {
     return [
@@ -1063,13 +1138,23 @@
         return null;
       }
       driverCount = meta.count; driverAt = meta.at;
-      return getAvailability().then(function (list) {
-        var cities = buildCityList(list);
-        if (!cities.length) { cardError("No drivers to search from.", "None of your drivers had a usable drop-off location (Advanced → View drivers)."); return null; }
+      // Always try the organisation location first; only fall back to each
+      // driver's own drop-off city (buildCityList) if it isn't available.
+      return getOrgLocations().then(function (orgCities) {
+        if (orgCities.length) {
+          console.log("[RLB fill] searching from organisation location(s): " + orgCities.map(function (c) { return c.city; }).join(", "));
+          batches = orgCities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
+          roundIdx = 0;
+          return runAllRounds(steps, orgCities);
+        }
+        return getAvailability().then(function (list) {
+          var cities = buildCityList(list);
+          if (!cities.length) { cardError("No drivers to search from.", "No organisation location is configured, and none of your drivers had a usable drop-off location (Advanced → View drivers)."); return null; }
 
-        batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
-        roundIdx = 0;
-        return runAllRounds(steps, cities);
+          batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
+          roundIdx = 0;
+          return runAllRounds(steps, cities);
+        });
       });
     }).catch(function (e) {
       logError("runAutopilot", e);

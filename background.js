@@ -2259,4 +2259,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     return true;
   }
+  // The organisation's own location(s) — the carrier's FleetYes approved
+  // places (same source buildUnassignedDriverAvailability already uses for
+  // unassigned drivers). loadboard.js uses this as the PRIMARY search origin
+  // for "Find my best loads", falling back to per-driver drop-off cities when
+  // this is unavailable (no carrier code configured, API error, or empty).
+  if (msg.type === "get-org-locations") {
+    getConfig()
+      .then((cfg) => fetchApprovedPlaces(cfg))
+      .then((places) => sendResponse({ ok: true, places: places }))
+      .catch((e) => {
+        logError("background/get-org-locations", e);
+        sendResponse({ ok: false, error: String((e && e.message) || e) });
+      });
+    return true;
+  }
 });
