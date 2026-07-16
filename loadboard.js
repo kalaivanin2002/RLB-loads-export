@@ -947,15 +947,19 @@
       } else if (r.verified < cities.length) {
         console.log("[RLB fill] only " + r.verified + "/" + cities.length + " origin cities selected — searching with those");
       }
-      return closeOverlays(); // dismiss the origin dropdown before Equipment
+      return closeOverlays(); // dismiss the origin dropdown before Radius
+    }).then(function () {
+      // Radius before Equipment: Relay auto-fires a live search on each filter
+      // change, and Equipment is the field that actually completes the required
+      // set — setting Radius first means that auto-search already sees 250
+      // instead of firing once at the stale default (50) and again at 250.
+      return setRadius(); // New search resets radius to Relay's default; force ours
+    }).then(function () {
+      return closeOverlays(); // dismiss the radius popover before Equipment
     }).then(function () {
       return setEquipment(); // New search clears equipment; restore it or search blanks
     }).then(function () {
-      return closeOverlays(); // dismiss the equipment popover before Radius
-    }).then(function () {
-      return setRadius(); // New search resets radius to Relay's default; force ours
-    }).then(function () {
-      return closeOverlays(); // dismiss the radius popover before Search
+      return closeOverlays(); // dismiss the equipment popover before Search
     }).then(function () {
       var sb = findSearchButton();
       if (sb && !sb.disabled) { realClick(sb); return delay(600); }
