@@ -1420,8 +1420,19 @@ function activeDriverShiftsUrl(cfg) {
 
 // Fetch the carrier's active driver shifts. Uses the same auth as the other
 // OnTrack/FleetYes calls (carrier_code query + Bearer token from settings).
+// Missing carrier code / token are CONFIG errors (config: true) so the caller
+// surfaces them to the user instead of quietly falling back to Relay trips.
 async function fetchDriverSchedule(cfg) {
-  if (!cfg.carrierCode) throw new Error("No carrier_code set (Developer settings).");
+  if (!cfg.carrierCode) {
+    const err = new Error("No carrier code set — enter it in Developer settings.");
+    err.config = true;
+    throw err;
+  }
+  if (!cfg.token) {
+    const err = new Error("No API token set — enter the Bearer token in Developer settings.");
+    err.config = true;
+    throw err;
+  }
   const url = activeDriverShiftsUrl(cfg) + "?carrier_code=" + encodeURIComponent(cfg.carrierCode);
   const res = await fetch(url, { headers: { Accept: "application/json", Authorization: "Bearer " + cfg.token } });
   const text = await res.text();
@@ -1536,12 +1547,11 @@ function londonOffsetMinutes(ms) {
 // purposes, but is NOT used for the search. tabId resolves the Search Location
 // city to coordinates via the Relay cities endpoint — no trips are read.
 async function buildScheduleAvailability(tabId, cfg) {
-  const rows = await fetchDriverSchedule(cfg);
   const now = Date.now();
 
-  // The Search Location is required — with no place to search from, nothing can
-  // be scored. These are CONFIG errors (config: true) so the caller surfaces them
-  // directly to the user instead of quietly falling back to Relay trips.
+  // Validate config BEFORE hitting the API, so a missing Search Location fails
+  // fast (no wasted request) with a clear message. These are CONFIG errors
+  // (config: true) so the caller surfaces them instead of falling back to Relay.
   const searchLoc = (cfg.searchLocation || "").trim();
   if (!searchLoc) {
     const err = new Error("No Search Location set — enter one in Planning rules (settings).");
@@ -1555,6 +1565,9 @@ async function buildScheduleAvailability(tabId, cfg) {
     throw err;
   }
   const freeLocation = { city: c.name, country: c.country || null, latitude: c.latitude, longitude: c.longitude };
+
+  // Then fetch the shifts (also throws config errors for missing carrier/token).
+  const rows = await fetchDriverSchedule(cfg);
 
   const out = [];
   let noEnd = 0;
@@ -2329,7 +2342,7 @@ async function refreshAvailabilityOnly() {
   } catch (e) {
     await logError("background/refreshAvailabilityOnly/schedule", e);
     // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
-    if (e && e.config) return { ok: false, error: (e && e.message) || String(e) };
+    if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
     apiError = (e && e.message) || String(e);
     console.warn("[RLB availability] ✗ shifts API FAILED (" + apiError + ") — falling back to Relay trips.");
     await log("loads", "Shifts API failed (" + apiError + ") — using Relay trips instead.", "warn");
@@ -2375,7 +2388,7 @@ async function refreshUnassignedDriversOnly() {
   } catch (e) {
     await logError("background/refreshUnassignedDriversOnly/schedule", e);
     // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
-    if (e && e.config) return { ok: false, error: (e && e.message) || String(e) };
+    if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
     apiError = (e && e.message) || String(e);
     console.warn("[RLB availability] ✗ shifts API FAILED (" + apiError + ") — falling back to Relay unassigned.");
     await log("loads", "Shifts API failed (" + apiError + ") — using Relay drivers instead.", "warn");
