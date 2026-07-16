@@ -871,23 +871,38 @@
     });
   }
 
-  // Best-effort only: if Relay's search form exposes a distance/radius toggle
-  // near Origin (commonly a compact control showing e.g. "50 mi"), bump it to
-  // WIDE_RADIUS_MILES. Never throws and never blocks the rest of the fill —
-  // if the control can't be found or opened, the round just runs at Relay's
-  // own default radius (logged, not fatal).
-  function findRadiusToggle() {
-    var els = document.querySelectorAll("button,[role='button'],[role='combobox']");
+  // Best-effort only: if Relay's search form exposes a Radius field near
+  // Origin, bump it to WIDE_RADIUS_MILES. Never throws and never blocks the
+  // rest of the fill — if the control can't be found or set, the round just
+  // runs at Relay's own default radius (logged, not fatal).
+  //
+  // Found by its "Radius" LABEL text, not by the value it displays — the
+  // box only shows the bare number (e.g. "50", no "mi/miles" suffix), which
+  // is what the previous value-text-matching version got wrong (it never
+  // matched and silently left Relay's default in place).
+  function radiusBox() {
+    var els = document.querySelectorAll("label,div,span,legend,h3,h4,p");
+    var fallback = null;
     for (var i = 0; i < els.length; i++) {
-      if (!isVisible(els[i])) continue;
       var t = (els[i].textContent || "").replace(/\s+/g, " ").trim();
-      if (/^\d{1,4}\s*mi(les)?\.?$/i.test(t)) return els[i];
+      if (t !== "Radius") continue;
+      var node = els[i];
+      for (var d = 0; d < 6 && node; d++) {
+        if (node.querySelector) {
+          var ctl = node.querySelector('input, [role="combobox"], [role="button"], button');
+          if (ctl) {
+            if (isVisible(ctl)) return { box: node, control: ctl };
+            if (!fallback) fallback = { box: node, control: ctl };
+          }
+        }
+        node = node.parentElement;
+      }
     }
-    return null;
+    return fallback;
   }
-  function findRadiusOption(miles) {
-    var re = new RegExp("^" + miles + "\\s*mi(les)?\\.?$", "i");
-    var opts = document.querySelectorAll('[role="option"],[role="menuitem"],li');
+  function radiusOptionFor(miles) {
+    var re = new RegExp("^" + miles + "\\s*(mi|mile|miles)?\\.?$", "i");
+    var opts = document.querySelectorAll('[role="option"],[role="menuitem"],li,button');
     for (var i = 0; i < opts.length; i++) {
       if (!isVisible(opts[i])) continue;
       var t = (opts[i].textContent || "").replace(/\s+/g, " ").trim();
@@ -896,20 +911,33 @@
     return null;
   }
   function setSearchRadius(miles) {
-    var toggle = findRadiusToggle();
-    if (!toggle) {
+    var found = radiusBox();
+    if (!found) {
       console.log("[RLB fill] radius control not found — using Relay's default radius");
       return delay(0);
     }
-    var current = (toggle.textContent || "").match(/\d+/);
-    if (current && Number(current[0]) === miles) return delay(0); // already set
-    realClick(toggle);
-    return waitFor(function () { return findRadiusOption(miles); }, 1500, 120).then(function (opt) {
-      realClick(opt);
-      return delay(300);
-    }, function () {
-      console.log("[RLB fill] radius option '" + miles + " mi' not offered after opening the control — leaving default");
-      return closeOverlays();
+    var boxHasValue = function () { return ((found.box.textContent || "").indexOf(String(miles)) !== -1); };
+    if (boxHasValue()) return delay(0); // already set
+
+    var openAndPick = function () {
+      realClick(found.control);
+      return waitFor(function () { return radiusOptionFor(miles); }, 1500, 120).then(function (opt) {
+        realClick(opt);
+        return delay(300);
+      }, function () {
+        console.log("[RLB fill] radius option '" + miles + "' not offered after opening the control — leaving default");
+        return closeOverlays();
+      });
+    };
+
+    if (found.control.tagName !== "INPUT") return openAndPick();
+
+    // Plain numeric input: try setting it directly first (cheaper, no popover).
+    found.control.focus();
+    nativeSetValue(found.control, String(miles));
+    return delay(300).then(function () {
+      if (boxHasValue()) return; // stuck as a plain input
+      return openAndPick(); // React ignored the direct set — it's really a dropdown
     });
   }
 
