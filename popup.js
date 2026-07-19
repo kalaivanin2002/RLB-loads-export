@@ -32,26 +32,28 @@
     ontrackUrl: "https://ontrack-api.agilecyber.com/api/v1/rlb-locations",
     token: "",
     carrierCode: "",
+    // Local, popup-only setting — deliberately NOT synced from FleetYes.
+    searchLocation: "",
   };
 
   const $ = (id) => document.getElementById(id);
   const els = {
     toggleDev: $("toggleDev"),
     devSettings: $("devSettings"),
+    searchLocation: $("searchLocation"),
     ontrackUrl: $("ontrackUrl"),
     token: $("token"),
     carrierCode: $("carrierCode"),
-    relayBase: $("relayBase"),
     saveDev: $("saveDev"),
   };
 
   function loadSettings() {
     chrome.storage.local.get(Object.keys(DEFAULTS), (r) => {
       const cfg = Object.assign({}, DEFAULTS, r || {});
+      els.searchLocation.value = cfg.searchLocation || "";
       els.ontrackUrl.value = cfg.ontrackUrl;
       els.token.value = cfg.token;
       els.carrierCode.value = cfg.carrierCode || "";
-      els.relayBase.value = cfg.relayBase;
     });
   }
 
@@ -72,7 +74,10 @@
   // server-synced planning/scoring settings sitting alongside them in storage.
   function saveSettings() {
     const cfg = {
-      relayBase: els.relayBase.value.trim() || DEFAULTS.relayBase,
+      searchLocation: els.searchLocation.value.trim(),
+      // relayBase is no longer user-editable — kept as the built-in default so the
+      // Relay API calls always have a base (see cfg.relayBase in background.js).
+      relayBase: DEFAULTS.relayBase,
       ontrackUrl: els.ontrackUrl.value.trim() || DEFAULTS.ontrackUrl,
       token: els.token.value.trim(),
       carrierCode: els.carrierCode.value.trim(),

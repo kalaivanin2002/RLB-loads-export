@@ -1434,8 +1434,11 @@ function rlbSettingsUrl(cfg) {
 //
 // Only the keys the server owns are written; local-only keys (token, ontrackUrl,
 // carrierCode, the harvest knobs, etc.) are left untouched.
+// NOTE: searchLocation is deliberately NOT here — it is a LOCAL, popup-only
+// setting the user enters per browser, so the FleetYes sync must never overwrite
+// it. All the other planning rules are server-owned.
 const RLB_SERVER_PLANNING_KEYS = [
-  "searchLocation", "nearbyRadius", "minTripMiles", "restHours",
+  "nearbyRadius", "minTripMiles", "restHours",
   "availabilityLeadHours", "maxWaitHours", "gapBeforeNextHours",
   "deadheadMph", "matchEquipment",
 ];

@@ -23,6 +23,12 @@
     <!-- Developer setup: connection only. URLs, token, carrier. Set once. -->
     <button id="toggleDev" class="disclosure" type="button">Developer settings ▾</button>
     <div id="devSettings" class="settings hidden">
+      <div class="settings-title">Search</div>
+      <label class="field">
+        <span>Search location</span>
+        <input id="searchLocation" type="text" placeholder="e.g. Darlington, UK" />
+        <small class="field-hint">The city all drivers' loads are searched from. Entered here only — it is not synced from FleetYes. Required, or searches won't run.</small>
+      </label>
       <div class="settings-title">Developer · connection</div>
       <label class="field">
         <span>Locations API URL (FleetYes/OnTrack)</span>
@@ -38,11 +44,6 @@
         <span>Carrier code</span>
         <input id="carrierCode" type="text" placeholder="e.g. AMRTL" />
         <small class="field-hint">Your carrier code, used for the FleetYes approved-places lookup (unassigned drivers).</small>
-      </label>
-      <label class="field">
-        <span>Relay base URL</span>
-        <input id="relayBase" type="text" placeholder="https://relay.amazon.co.uk" />
-        <small class="field-hint">Your Amazon Relay site (e.g. .co.uk for UK). Must match the tab you're logged into.</small>
       </label>
       <button id="saveDev" class="btn-secondary" type="button">Save settings</button>
     </div>

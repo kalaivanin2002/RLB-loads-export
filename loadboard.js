@@ -208,23 +208,27 @@
       }
     });
 
-    var btnUnassigned = document.createElement("button");
-    btnUnassigned.id = "rlb-launch-unassigned";
-    btnUnassigned.type = "button";
-    btnUnassigned.innerHTML = '<span class="bolt">👤</span><span class="lbl">Find loads for unassigned drivers</span>';
-    btnUnassigned.title = "Find loads ONLY for drivers with no current trip (idle / unassigned).";
-    document.body.appendChild(btnUnassigned);
-    btnUnassigned.addEventListener("click", function () {
-      try {
-        runUnassignedDriversAutopilot();
-      } catch (e) {
-        console.log("[RLB] launch (unassigned) error:", e);
-        logError("launchUnassignedClick", e);
-        try { showCard(); cardError("Couldn't start", (e && e.message) ? e.message : String(e)); } catch (e2) {}
-        setLaunchBusy(false);
-        autofillBusy = false;
-      }
-    });
+    // "Find loads for unassigned drivers" (👤) is hidden for now — the button is
+    // not created, so it never appears and its handler never binds. The underlying
+    // runUnassignedDriversAutopilot() flow is left intact for easy re-enabling:
+    // just uncomment this block.
+    // var btnUnassigned = document.createElement("button");
+    // btnUnassigned.id = "rlb-launch-unassigned";
+    // btnUnassigned.type = "button";
+    // btnUnassigned.innerHTML = '<span class="bolt">👤</span><span class="lbl">Find loads for unassigned drivers</span>';
+    // btnUnassigned.title = "Find loads ONLY for drivers with no current trip (idle / unassigned).";
+    // document.body.appendChild(btnUnassigned);
+    // btnUnassigned.addEventListener("click", function () {
+    //   try {
+    //     runUnassignedDriversAutopilot();
+    //   } catch (e) {
+    //     console.log("[RLB] launch (unassigned) error:", e);
+    //     logError("launchUnassignedClick", e);
+    //     try { showCard(); cardError("Couldn't start", (e && e.message) ? e.message : String(e)); } catch (e2) {}
+    //     setLaunchBusy(false);
+    //     autofillBusy = false;
+    //   }
+    // });
 
     // "Only my driver locations" filter — when checked, hide every load card that
     // isn't matched to one of your drivers. Reflects the persisted `onlyMyDrivers`
