@@ -15,6 +15,7 @@
   var driverCount = 0;
   var driverAt = null;
   var onlyMyDrivers = false; // "only my driver locations" filter — hide unmatched load cards
+  var fleetyesRefresh = false; // "Fleetyes refresh" bottom-bar toggle state
   var lastDriverError = null; // set by refreshDriversAsync on failure, shown in the "No drivers found" card
   var lastDriverErrorConfig = false; // true when lastDriverError is a config problem (missing settings)
   var lastAvailabilitySource = null; // "schedule-api" | "relay-trips-fallback" — from the last refresh
@@ -112,16 +113,17 @@
       "#rlb-launch-unassigned:disabled{cursor:default;}",
       "#rlb-launch-unassigned .bolt{font-size:16px;}",
       "#rlb-launch-unassigned.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
-      // "Only my driver locations" filter chip — a slider-style toggle + label.
-      "#rlb-only-mine,#rlb-only-mine *{box-sizing:border-box;}",
-      "#rlb-only-mine{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);cursor:pointer;user-select:none;}",
+      // Bottom-bar slider toggle chips — shared by "Only my driver locations"
+      // (#rlb-only-mine) and "Fleetyes refresh" (#rlb-fleetyes-refresh).
+      "#rlb-only-mine,#rlb-fleetyes-refresh,#rlb-only-mine *,#rlb-fleetyes-refresh *{box-sizing:border-box;}",
+      "#rlb-only-mine,#rlb-fleetyes-refresh{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);cursor:pointer;user-select:none;}",
       // Toggle switch: the real checkbox is transparent on top; the slider draws the UI.
-      "#rlb-only-mine .rlb-switch{position:relative;display:inline-block;width:34px;height:18px;flex:none;}",
-      "#rlb-only-mine .rlb-switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;}",
-      "#rlb-only-mine .rlb-slider{position:absolute;inset:0;background:#cbd5e1;border-radius:999px;transition:background .15s ease;}",
-      "#rlb-only-mine .rlb-slider::before{content:\"\";position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s ease;}",
-      "#rlb-only-mine .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
-      "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
+      "#rlb-only-mine .rlb-switch,#rlb-fleetyes-refresh .rlb-switch{position:relative;display:inline-block;width:34px;height:18px;flex:none;}",
+      "#rlb-only-mine .rlb-switch input,#rlb-fleetyes-refresh .rlb-switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;}",
+      "#rlb-only-mine .rlb-slider,#rlb-fleetyes-refresh .rlb-slider{position:absolute;inset:0;background:#cbd5e1;border-radius:999px;transition:background .15s ease;}",
+      "#rlb-only-mine .rlb-slider::before,#rlb-fleetyes-refresh .rlb-slider::before{content:\"\";position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s ease;}",
+      "#rlb-only-mine .rlb-switch input:checked + .rlb-slider,#rlb-fleetyes-refresh .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
+      "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before,#rlb-fleetyes-refresh .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
       // Hide non-matching load cards when the filter is on (data-attr = React-safe,
       // same approach as the highlight outline — we never touch Relay's child nodes).
       "[data-rlb-hidden]{display:none!important;}",
@@ -250,6 +252,20 @@
       schedulePaint();
     });
 
+    // "Fleetyes refresh" — a twin of the toggle above, placed to its LEFT by
+    // positionOnlyMine. State persists; the on/off action is a stub for now.
+    var fy = document.createElement("label");
+    fy.id = "rlb-fleetyes-refresh";
+    fy.title = "Fleetyes refresh";
+    fy.innerHTML = '<span class="rlb-switch"><input id="rlb-fleetyes-refresh-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Fleetyes refresh</span>';
+    document.body.appendChild(fy);
+    var fyCb = fy.querySelector("#rlb-fleetyes-refresh-cb");
+    fyCb.checked = fleetyesRefresh;
+    fyCb.addEventListener("change", function () {
+      fleetyesRefresh = fyCb.checked;
+      try { chrome.storage.local.set({ fleetyesRefresh: fleetyesRefresh }); } catch (e) { /* context invalidated */ }
+    });
+
     var card = document.createElement("div");
     card.id = "rlb-card";
     card.innerHTML =
@@ -310,23 +326,47 @@
   function positionOnlyMine() {
     var only = document.getElementById("rlb-only-mine");
     if (!only) return;
-    var refresh = findRelayRefreshControl();
-    var anchorEl = refresh || document.querySelector(".refresh-and-chat-box");
+    // Anchor to the whole refresh/auto-refresh cluster (.refresh-and-chat-box)
+    // and sit the toggle just to its LEFT, so it always reads as BEFORE "Turn on
+    // auto-refresh" regardless of the icon/switch order inside the box. Fall back
+    // to the refresh button, then the CSS bottom-right default, if absent.
+    var anchorEl = document.querySelector(".refresh-and-chat-box");
+    if (!anchorEl) {
+      var refresh = findRelayRefreshControl();
+      anchorEl = (refresh && (refresh.closest ? refresh.closest(".refresh-and-chat-box") : null)) || refresh;
+    }
     if (!anchorEl) {
       // Not rendered yet — clear any prior overrides so the CSS default applies.
       only.style.top = "auto"; only.style.left = "auto";
       only.style.right = ""; only.style.bottom = "";
-      return;
+    } else {
+      var r = anchorEl.getBoundingClientRect();
+      if (r.width && r.top < window.innerHeight && r.bottom > 0) {
+        var onlyH = only.offsetHeight || 34;
+        var center = r.top + r.height / 2;
+        only.style.top = Math.max(8, center - onlyH / 2) + "px";
+        only.style.left = "auto";
+        only.style.right = Math.max(8, window.innerWidth - r.left + 10) + "px";
+        only.style.bottom = "auto";
+      } else {
+        // Footer scrolled out of view → fall back to the CSS bottom-right default.
+        only.style.top = "auto"; only.style.left = "auto";
+        only.style.right = ""; only.style.bottom = "";
+      }
     }
-    var r = anchorEl.getBoundingClientRect();
-    // Footer scrolled out of view → leave the CSS bottom-right default in place.
-    if (!r.width || r.top >= window.innerHeight || r.bottom <= 0) return;
-    var onlyH = only.offsetHeight || 34;
-    var center = r.top + r.height / 2;
-    only.style.top = Math.max(8, center - onlyH / 2) + "px";
-    only.style.left = "auto";
-    only.style.right = Math.max(8, window.innerWidth - r.left + 10) + "px";
-    only.style.bottom = "auto";
+    // Place the "Fleetyes refresh" toggle immediately to the LEFT of the
+    // "Only my driver locations" toggle, on the same baseline. Runs in every
+    // path so the two chips never overlap.
+    var fy = document.getElementById("rlb-fleetyes-refresh");
+    if (fy) {
+      var oRect = only.getBoundingClientRect();
+      if (oRect.width) {
+        fy.style.top = Math.max(8, oRect.top) + "px";
+        fy.style.left = "auto";
+        fy.style.right = Math.max(8, window.innerWidth - oRect.left + 10) + "px";
+        fy.style.bottom = "auto";
+      }
+    }
   }
 
   function showCard() {
@@ -417,10 +457,13 @@
   // checkbox, and repaint so the filter takes effect on the current board.
   function loadOnlyMinePref() {
     try {
-      chrome.storage.local.get(["onlyMyDrivers"], function (r) {
+      chrome.storage.local.get(["onlyMyDrivers", "fleetyesRefresh"], function (r) {
         onlyMyDrivers = !!r.onlyMyDrivers;
         var cb = document.getElementById("rlb-only-mine-cb");
         if (cb) cb.checked = onlyMyDrivers;
+        fleetyesRefresh = !!r.fleetyesRefresh;
+        var fyCb = document.getElementById("rlb-fleetyes-refresh-cb");
+        if (fyCb) fyCb.checked = fleetyesRefresh;
         schedulePaint();
       });
     } catch (e) { /* context invalidated */ }
