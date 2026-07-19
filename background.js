@@ -1417,6 +1417,78 @@ function ontrackApiRoot(cfg) {
 function activeDriverShiftsUrl(cfg) {
   return ontrackApiRoot(cfg) + "/active-driver-shifts";
 }
+function rlbSettingsUrl(cfg) {
+  return ontrackApiRoot(cfg) + "/fleet-ops/rlb-settings";
+}
+
+// ── RLB settings sync ─────────────────────────────────────────────────────────
+// The FleetYes dashboard is the editor for the planning rules + developer
+// settings; the backend is the source of truth. Here we GET them for this
+// carrier and MERGE the two groups into chrome.storage.local, so the rest of the
+// workflow (getConfig) picks them up unchanged. The popup no longer edits these
+// keys — they come from the server.
+//
+// The carrier code is read off the Relay page (#case-carrier-scac) and passed in
+// by loadboard.js. Missing carrier code / token are CONFIG errors so the caller
+// can surface them instead of silently running on stale local values.
+//
+// Only the keys the server owns are written; local-only keys (token, ontrackUrl,
+// carrierCode, the harvest knobs, etc.) are left untouched.
+const RLB_SERVER_PLANNING_KEYS = [
+  "searchLocation", "nearbyRadius", "minTripMiles", "restHours",
+  "availabilityLeadHours", "maxWaitHours", "gapBeforeNextHours",
+  "deadheadMph", "matchEquipment",
+];
+const RLB_SERVER_DEVELOPER_KEYS = [
+  "useFleetyesPlaces", "arEnabled", "arMin", "arMax",
+  "weightPayout", "weightRate", "weightDeadhead", "weightTiming", "weightReposition",
+];
+
+async function fetchRlbSettings(cfg, carrierCode) {
+  if (!carrierCode) {
+    const err = new Error("No carrier code found on the Relay page (#case-carrier-scac).");
+    err.config = true;
+    throw err;
+  }
+  if (!cfg.token) {
+    const err = new Error("No API token set — enter the Bearer token in Developer settings.");
+    err.config = true;
+    throw err;
+  }
+  const url = rlbSettingsUrl(cfg) + "?carrier-code=" + encodeURIComponent(carrierCode);
+  const res = await fetch(url, { headers: { Accept: "application/json", Authorization: "Bearer " + cfg.token } });
+  const text = await res.text();
+  if (!res.ok) {
+    const err = new Error("rlb-settings HTTP " + res.status + ": " + text.slice(0, 200));
+    await logError("background/fetchRlbSettings", err, { url: url, status: res.status });
+    throw err;
+  }
+  let data;
+  try { data = JSON.parse(text); } catch (e) { throw new Error("rlb-settings response was not JSON"); }
+  return data && typeof data === "object" ? data : {};
+}
+
+// GET the server settings for this carrier and merge them into storage.
+// Returns { ok, applied } where `applied` is the count of keys written.
+async function syncRlbSettings(carrierCode) {
+  const cfg = await getConfig();
+  const data = await fetchRlbSettings(cfg, carrierCode);
+  const planning = (data && data.planningRules)     || {};
+  const developer = (data && data.developerSettings) || {};
+
+  const patch = {};
+  for (const k of RLB_SERVER_PLANNING_KEYS)  { if (k in planning)  patch[k] = planning[k]; }
+  for (const k of RLB_SERVER_DEVELOPER_KEYS) { if (k in developer) patch[k] = developer[k]; }
+
+  // arEnabled is only safe with a valid interval range — mirror the dashboard guard.
+  if ("arMin" in patch && "arMax" in patch && numOr(patch.arMin, 0) > numOr(patch.arMax, 0)) {
+    patch.arEnabled = false;
+  }
+
+  const applied = Object.keys(patch).length;
+  if (applied > 0) await chrome.storage.local.set(patch);
+  return { ok: true, applied: applied };
+}
 
 // Fetch the carrier's active driver shifts. Uses the same auth as the other
 // OnTrack/FleetYes calls (carrier_code query + Bearer token from settings).
@@ -2487,6 +2559,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch((e) => {
         logError("background/refresh-unassigned-drivers", e);
         sendResponse({ ok: false, error: String((e && e.message) || e) });
+      });
+    return true;
+  }
+  if (msg.type === "sync-rlb-settings") {
+    syncRlbSettings(msg.carrierCode)
+      .then(sendResponse)
+      .catch((e) => {
+        logError("background/sync-rlb-settings", e);
+        sendResponse({ ok: false, error: String((e && e.message) || e), config: !!(e && e.config) });
       });
     return true;
   }

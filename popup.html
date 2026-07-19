@@ -11,73 +11,23 @@
       <h1 class="title">RLB</h1>
     </div>
 
-    <!-- Planning rules: the scoring / feasibility knobs the on-page ⚡ workflow uses. -->
-    <button id="toggleAdmin" class="disclosure" type="button">Planning rules ▾</button>
-    <div id="adminSettings" class="settings hidden">
-      <label class="field">
-        <span>Search location</span>
-        <input id="searchLocation" type="text" placeholder="e.g. Darlington, UK" />
-        <small class="field-hint">The city all drivers' loads are searched from. Required — leave nothing here and searches won't run.</small>
-      </label>
-      <div class="field-row">
-        <label class="field">
-          <span>Max pickup distance (mi)</span>
-          <input id="nearbyRadius" type="number" min="0" step="1" />
-          <small class="field-hint">Keep only loads whose pickup is within this straight-line distance of the driver (the empty miles to start).</small>
-        </label>
-        <label class="field">
-          <span>Min load length (mi)</span>
-          <input id="minTripMiles" type="number" min="0" step="1" />
-          <small class="field-hint">Drop loads shorter than this, so tiny shuttles don't beat real runs. 0 = keep all.</small>
-        </label>
-      </div>
-      <div class="field-row">
-        <label class="field">
-          <span>Rest after trip (h)</span>
-          <input id="restHours" type="number" min="0" step="0.5" />
-          <small class="field-hint">Flat rest added once after a driver finishes a trip (simplified — not full tacho rules). 0 = off.</small>
-        </label>
-        <label class="field">
-          <span>Availability lead (h)</span>
-          <input id="availabilityLeadHours" type="number" min="0" step="0.5" />
-          <small class="field-hint">Treat a driver as free this long before their trip ends — loads picking up this early are matched. 0 = only from trip end.</small>
-        </label>
-      </div>
-      <div class="field-row">
-        <label class="field">
-          <span>Look-ahead window (h)</span>
-          <input id="maxWaitHours" type="number" min="0" step="1" />
-          <small class="field-hint">Latest pickup = free time + this. How far ahead to look for a load.</small>
-        </label>
-        <label class="field">
-          <span>Buffer before next trip (h)</span>
-          <input id="gapBeforeNextHours" type="number" min="0" step="0.5" />
-          <small class="field-hint">Load must deliver at least this long before the driver's next booked trip.</small>
-        </label>
-      </div>
-      <div class="field-row">
-        <label class="field">
-          <span>Deadhead speed (mph)</span>
-          <input id="deadheadMph" type="number" min="1" step="1" />
-          <small class="field-hint">Assumed speed over the empty miles to pickup — used to check the driver can reach it in time.</small>
-        </label>
-        <div class="field">
-          <span>Match equipment</span>
-          <span class="check"><input id="matchEquipment" type="checkbox" /> On</span>
-          <small class="field-hint">Skip loads whose trailer type differs from the driver's (when both are known).</small>
-        </div>
-      </div>
-      <button id="saveAdmin" class="btn-secondary" type="button">Save settings</button>
-    </div>
+    <!-- Planning rules and scoring now live in FleetYes → Settings → RLB Settings.
+         They are synced to this extension automatically for your carrier. Only
+         the connection setup below is edited here. -->
+    <p class="field-hint" style="margin: 0 0 4px;">
+      Planning rules, auto-refresh and scoring weights are configured in
+      <strong>FleetYes → Settings → RLB Settings</strong> and synced here
+      automatically for your carrier.
+    </p>
 
-    <!-- Developer setup: URLs, token, carrier, and scoring weights. Set once. -->
+    <!-- Developer setup: connection only. URLs, token, carrier. Set once. -->
     <button id="toggleDev" class="disclosure" type="button">Developer settings ▾</button>
     <div id="devSettings" class="settings hidden">
-      <div class="settings-title">Developer · setup &amp; scoring</div>
+      <div class="settings-title">Developer · connection</div>
       <label class="field">
         <span>Locations API URL (FleetYes/OnTrack)</span>
         <input id="ontrackUrl" type="text" placeholder="https://ontrack-api.agilecyber.com/api/v1/rlb-locations" />
-        <small class="field-hint">FleetYes/OnTrack base — also used to derive the approved-places endpoint for unassigned drivers.</small>
+        <small class="field-hint">FleetYes/OnTrack base — also used to derive the approved-places and RLB settings endpoints.</small>
       </label>
       <label class="field">
         <span>Bearer token</span>
@@ -89,66 +39,11 @@
         <input id="carrierCode" type="text" placeholder="e.g. AMRTL" />
         <small class="field-hint">Your carrier code, used for the FleetYes approved-places lookup (unassigned drivers).</small>
       </label>
-      <div class="settings-title">Auto-refresh loads</div>
-      <label class="field check">
-        <input id="arEnabled" type="checkbox" />
-        <span>Enable auto-refresh</span>
-        <small class="field-hint">Refresh the load board on our own timer (Relay's native auto-refresh stays off). Each cycle waits a random time between min and max.</small>
-      </label>
-      <div class="field-row">
-        <label class="field">
-          <span>Min interval (s)</span>
-          <select id="arMin"></select>
-          <small class="field-hint">Shortest wait between refreshes.</small>
-        </label>
-        <label class="field">
-          <span>Max interval (s)</span>
-          <select id="arMax"></select>
-          <small class="field-hint">Longest wait between refreshes. Must be ≥ min.</small>
-        </label>
-      </div>
-      <small id="arError" class="field-hint" style="color:#dc2626;display:none;">Min must be less than or equal to Max.</small>
-
-      <label class="field check">
-        <input id="useFleetyesPlaces" type="checkbox" />
-        <span>Use FleetYes places for unassigned drivers</span>
-        <small class="field-hint">On: unassigned drivers are searched from your FleetYes approved places (by city). Off: their Relay home domicile.</small>
-      </label>
       <label class="field">
         <span>Relay base URL</span>
         <input id="relayBase" type="text" placeholder="https://relay.amazon.co.uk" />
         <small class="field-hint">Your Amazon Relay site (e.g. .co.uk for UK). Must match the tab you're logged into.</small>
       </label>
-      <div class="settings-title">Scoring weights (relative)</div>
-      <div class="field-row">
-        <label class="field">
-          <span>Payout</span>
-          <input id="weightPayout" type="number" min="0" step="0.05" />
-          <small class="field-hint">Weight on total £ of the run.</small>
-        </label>
-        <label class="field">
-          <span>Rate</span>
-          <input id="weightRate" type="number" min="0" step="0.05" />
-          <small class="field-hint">Weight on £ per mile.</small>
-        </label>
-        <label class="field">
-          <span>Deadhead</span>
-          <input id="weightDeadhead" type="number" min="0" step="0.05" />
-          <small class="field-hint">Weight on fewer empty miles to pickup.</small>
-        </label>
-      </div>
-      <div class="field-row">
-        <label class="field">
-          <span>Timing</span>
-          <input id="weightTiming" type="number" min="0" step="0.05" />
-          <small class="field-hint">Weight on starting sooner.</small>
-        </label>
-        <label class="field">
-          <span>Reposition</span>
-          <input id="weightReposition" type="number" min="0" step="0.05" />
-          <small class="field-hint">Weight on finishing near where the driver started (avoids stranding far away).</small>
-        </label>
-      </div>
       <button id="saveDev" class="btn-secondary" type="button">Save settings</button>
     </div>
   </div>

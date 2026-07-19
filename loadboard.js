@@ -1417,9 +1417,45 @@
     } catch (e) { /* context invalidated */ }
   }
 
+  // Read the carrier SCAC that Relay embeds in a hidden input on every page.
+  // <input type="hidden" id="case-carrier-scac" value="AMYSL" …>
+  function readCarrierCode() {
+    var el = document.getElementById("case-carrier-scac");
+    var v = el && el.value ? String(el.value).trim() : "";
+    return v || null;
+  }
+
+  // Pull the latest RLB settings for this carrier from FleetYes and merge them
+  // into the extension's storage before a run, so scoring uses server values.
+  // Best-effort: a failure here must not block the drivers refresh — we log it
+  // and carry on with whatever settings are already in storage.
+  function syncSettings(done) {
+    var carrierCode = readCarrierCode();
+    if (!carrierCode) {
+      logError("syncSettings", "carrier code not found on page (#case-carrier-scac)");
+      done();
+      return;
+    }
+    try {
+      chrome.runtime.sendMessage({ type: "sync-rlb-settings", carrierCode: carrierCode }, function (res) {
+        if (chrome.runtime.lastError || !res || !res.ok) {
+          var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "failed";
+          logError("syncSettings", msg);
+        }
+        done();
+      });
+    } catch (e) {
+      logError("syncSettings", e);
+      done();
+    }
+  }
+
   function refreshDrivers() {
     var btn = document.getElementById("rlb-refresh");
     if (btn) { btn.disabled = true; btn.textContent = "Refreshing…"; }
+    setPanel("rlb-msg", "Syncing settings…");
+    // Sync server settings first, then fetch trips with those settings applied.
+    syncSettings(function () {
     setPanel("rlb-msg", "Fetching trips…");
     try {
       chrome.runtime.sendMessage({ type: "refresh-availability" }, function (res) {
@@ -1441,6 +1477,7 @@
       logError("refreshDriversButton", e);
       setPanel("rlb-msg", "Extension reloaded — refresh the page.");
     }
+    }); // end syncSettings
   }
 
   // ── scoring ────────────────────────────────────────────────────────────────────
