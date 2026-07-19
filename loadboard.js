@@ -126,6 +126,9 @@
       // Auto-refresh countdown chip — sits beside the Refresh toggle and shows
       // the remaining seconds until the next automatic board refresh.
       "#rlb-ar-countdown{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:600 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:rgb(0,104,141);box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
+      // "Next Refresh" label — sits to the LEFT of the countdown while the Refresh
+      // toggle is on, so the row reads: Only my drivers | Next Refresh | 7s | Refresh.
+      "#rlb-next-refresh-label{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
       // Hide non-matching load cards when the filter is on (data-attr = React-safe,
       // same approach as the highlight outline — we never touch Relay's child nodes).
       "[data-rlb-hidden]{display:none!important;}",
@@ -276,6 +279,13 @@
     arCd.title = "Time until the next automatic refresh";
     document.body.appendChild(arCd);
 
+    // "Next Refresh" label — placed to the LEFT of the countdown (only while the
+    // Refresh toggle is on).
+    var nrLbl = document.createElement("span");
+    nrLbl.id = "rlb-next-refresh-label";
+    nrLbl.textContent = "Next Refresh";
+    document.body.appendChild(nrLbl);
+
     var card = document.createElement("div");
     card.id = "rlb-card";
     card.innerHTML =
@@ -384,16 +394,28 @@
   function hideAutoRefreshToggle() {
     var box = document.querySelector(".refresh-and-chat-box");
     if (!box) return;
-    var sw = box.querySelector('input[role="switch"], [role="switch"]');
-    if (sw && sw.style.display !== "none") sw.style.display = "none";
+    // The visible toggle is a painted slider that shares a wrapper with the
+    // accessible switch — so hide the WRAPPER (climb from the switch to the box's
+    // direct child), not just the switch input (which is often invisible on its
+    // own). Relay's role isn't always literally "switch", so match a few shapes.
+    var sw = box.querySelector('[role="switch"], [role="checkbox"], button[aria-checked="true"], button[aria-checked="false"]');
+    if (sw) {
+      var refreshBtn = findRelayRefreshControl();
+      var sLab = (sw.getAttribute && (sw.getAttribute("aria-label") || sw.getAttribute("title"))) || (sw.textContent || "");
+      // Never treat the refresh button or chat button as the toggle.
+      if (sw !== refreshBtn && !/chat|message|help|support|reload/i.test(sLab)) {
+        var node = sw;
+        while (node && node.parentElement && node.parentElement !== box) node = node.parentElement;
+        if (node && node !== box && node.style.display !== "none") node.style.display = "none";
+      }
+    }
+    // Hide the "…auto-refresh" label leaf(s) — sometimes outside the wrapper.
     var nodes = box.querySelectorAll("*");
     for (var i = 0; i < nodes.length; i++) {
       var n = nodes[i];
       if (n.children.length !== 0) continue;
       var lt = (n.textContent || "").trim().toLowerCase();
-      if (lt && /auto[\s-]?refresh/.test(lt)) {
-        if (n.style.display !== "none") n.style.display = "none";
-      }
+      if (lt && /auto[\s-]?refresh/.test(lt) && n.style.display !== "none") n.style.display = "none";
     }
   }
 
@@ -468,6 +490,17 @@
         arCdEl.style.left = "auto";
         arCdEl.style.right = Math.max(8, window.innerWidth - fRect.left + 8) + "px";
         arCdEl.style.bottom = "auto";
+      }
+    }
+    // Place the "Next Refresh" label immediately to the LEFT of the countdown.
+    var nrEl = document.getElementById("rlb-next-refresh-label");
+    if (nrEl && arCdEl) {
+      var cdRect = arCdEl.getBoundingClientRect();
+      if (cdRect.width) {
+        nrEl.style.top = Math.max(8, cdRect.top) + "px";
+        nrEl.style.left = "auto";
+        nrEl.style.right = Math.max(8, window.innerWidth - cdRect.left + 8) + "px";
+        nrEl.style.bottom = "auto";
       }
     }
     hideLastUpdated();
@@ -1957,8 +1990,11 @@
   function reflectAutoRefreshToggle() {
     var cb = document.getElementById("rlb-fleetyes-refresh-cb");
     if (cb && cb.checked !== arEnabled) cb.checked = arEnabled;
+    var show = arEnabled ? "inline-flex" : "none";
     var cd = document.getElementById("rlb-ar-countdown");
-    if (cd) cd.style.display = arEnabled ? "inline-flex" : "none";
+    if (cd) cd.style.display = show;
+    var nr = document.getElementById("rlb-next-refresh-label");
+    if (nr) nr.style.display = show;
   }
 
   function tickCountdown() {
