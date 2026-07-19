@@ -1417,8 +1417,15 @@ function ontrackApiRoot(cfg) {
 function activeDriverShiftsUrl(cfg) {
   return ontrackApiRoot(cfg) + "/active-driver-shifts";
 }
+// The rlb-settings API lives on the SAME host as ontrackUrl but under a different
+// path prefix: /int/v1 (not /api/v1). Derive the scheme+host from ontrackUrl and
+// append the fixed /int/v1/fleet-ops/rlb-settings path.
 function rlbSettingsUrl(cfg) {
-  return ontrackApiRoot(cfg) + "/fleet-ops/rlb-settings";
+  const raw = (cfg.ontrackUrl || "").replace(/\/+$/, "");
+  let origin = raw;
+  try { origin = new URL(raw).origin; } // scheme + host, drops any /api/v1/... path
+  catch (e) { origin = raw.replace(/(\/\/[^/]+).*$/, "$1"); } // fallback: keep up to host
+  return origin + "/int/v1/fleet-ops/rlb-settings";
 }
 
 // ── RLB settings sync ─────────────────────────────────────────────────────────
@@ -1458,7 +1465,7 @@ async function fetchRlbSettings(cfg, carrierCode) {
     err.config = true;
     throw err;
   }
-  const url = rlbSettingsUrl(cfg) + "?carrier-code=" + encodeURIComponent(carrierCode);
+  const url = rlbSettingsUrl(cfg) + "?carrier_code=" + encodeURIComponent(carrierCode);
   const res = await fetch(url, { headers: { Accept: "application/json", Authorization: "Bearer " + cfg.token } });
   const text = await res.text();
   if (!res.ok) {

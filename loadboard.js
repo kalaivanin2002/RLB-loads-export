@@ -1196,9 +1196,14 @@
       }
       steps[0].state = "active"; steps[0].label = force ? "Refreshing driver details" : "Fetching driver details";
       renderSteps(steps);
-      return refreshDriversAsync().then(function (count) {
-        steps[0].state = "done"; steps[1].state = "done"; renderSteps(steps);
-        return { count: count, at: Date.now() };
+      // Pull the latest planning rules / scoring weights from FleetYes (rlb-settings)
+      // BEFORE fetching drivers, so the fresh availability is built + scored with the
+      // current server settings. Best-effort — a sync failure never blocks the fetch.
+      return syncSettingsAsync().then(function () {
+        return refreshDriversAsync().then(function (count) {
+          steps[0].state = "done"; steps[1].state = "done"; renderSteps(steps);
+          return { count: count, at: Date.now() };
+        });
       });
     });
   }
@@ -1491,6 +1496,8 @@
         if (chrome.runtime.lastError || !res || !res.ok) {
           var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "failed";
           logError("syncSettings", msg);
+        } else {
+          console.log("[RLB board] rlb-settings synced (" + (res.applied != null ? res.applied + " key(s)" : "ok") + ").");
         }
         done();
       });
@@ -1498,6 +1505,14 @@
       logError("syncSettings", e);
       done();
     }
+  }
+
+  // Promise wrapper around syncSettings — resolves once the sync completes
+  // (success OR best-effort failure), so the autopilot can await it before fetching.
+  function syncSettingsAsync() {
+    return new Promise(function (resolve) {
+      try { syncSettings(resolve); } catch (e) { logError("syncSettingsAsync", e); resolve(); }
+    });
   }
 
   function refreshDrivers() {
