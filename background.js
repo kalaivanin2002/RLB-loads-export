@@ -18,7 +18,9 @@ importScripts("payloads.js"); // provides self.RLB_PAYLOADS (entitiesV2 request 
 
 const DEFAULTS = {
   relayBase: "https://relay.amazon.co.uk",
-  ontrackUrl: "https://ontrack-api.agilecyber.com/api/v1/",
+  // Bare host base. Each endpoint appends its own path: shifts → /api/v1/…,
+  // rlb-settings → /v1/… (see activeDriverShiftsUrl / rlbSettingsUrl).
+  ontrackUrl: "https://ontrack-api.agilecyber.com/",
   ingestUrl: "",
   token: "",
   carrierCode: "", // e.g. "AMRTL" — used for the FleetYes approved-places lookup
@@ -1403,29 +1405,28 @@ function buildAvailability(entities, cfg) {
 // location is still parsed and kept (apiLocation) for other uses. Equipment stays
 // null (the equipment filter skips loads only when both sides are known → no filter).
 
-// Derive the shifts endpoint from the configured OnTrack base URL. The setting
-// may be either the API ROOT (…/api/v1 or …/api/v1/) or a full resource URL
-// (…/api/v1/rlb-locations). We anchor on the "/api/v<N>" segment and append the
-// resource, so both forms yield …/api/v1/active-driver-shifts. Falls back to
-// stripping the last path segment if no /api/vN/ marker is present.
-function ontrackApiRoot(cfg) {
-  const raw = (cfg.ontrackUrl || "").replace(/\/+$/, ""); // drop trailing slash(es)
-  const m = raw.match(/^(.*\/api\/v\d+)(?:\/|$)/i);       // capture up to and incl. /api/vN
-  if (m) return m[1];
-  return raw.replace(/\/[^/]*$/, ""); // legacy fallback: strip last segment
-}
-function activeDriverShiftsUrl(cfg) {
-  return ontrackApiRoot(cfg) + "/active-driver-shifts";
-}
-// The rlb-settings API lives on the SAME host as ontrackUrl but under a different
-// path prefix: /int/v1 (not /api/v1). Derive the scheme+host from ontrackUrl and
-// append the fixed /int/v1/fleet-ops/rlb-settings path.
-function rlbSettingsUrl(cfg) {
+// The OnTrack base URL is now a bare host (https://ontrack-api.agilecyber.com/).
+// Each endpoint appends its own path prefix onto the scheme+host origin, so a
+// stray path on the setting (e.g. a legacy …/api/v1) never doubles up.
+function ontrackOrigin(cfg) {
   const raw = (cfg.ontrackUrl || "").replace(/\/+$/, "");
-  let origin = raw;
-  try { origin = new URL(raw).origin; } // scheme + host, drops any /api/v1/... path
-  catch (e) { origin = raw.replace(/(\/\/[^/]+).*$/, "$1"); } // fallback: keep up to host
-  return origin + "/int/v1/fleet-ops/rlb-settings";
+  try { return new URL(raw).origin; }                    // scheme + host only
+  catch (e) { return raw.replace(/(\/\/[^/]+).*$/, "$1"); } // fallback: keep up to host
+}
+// Legacy /api/vN root used only by approved-places (left unchanged for now).
+function ontrackApiRoot(cfg) {
+  const raw = (cfg.ontrackUrl || "").replace(/\/+$/, "");
+  const m = raw.match(/^(.*\/api\/v\d+)(?:\/|$)/i);
+  if (m) return m[1];
+  return ontrackOrigin(cfg) + "/api/v1"; // bare host → assume /api/v1
+}
+// active-driver-shifts: {{base}}/api/v1/active-driver-shifts
+function activeDriverShiftsUrl(cfg) {
+  return ontrackOrigin(cfg) + "/api/v1/active-driver-shifts";
+}
+// rlb-settings: {{base}}/v1/rlb-settings  (note: /v1, NOT /api/v1)
+function rlbSettingsUrl(cfg) {
+  return ontrackOrigin(cfg) + "/v1/rlb-settings";
 }
 
 // ── RLB settings sync ─────────────────────────────────────────────────────────
