@@ -1329,7 +1329,10 @@
     var steps = autopilotSteps(false);
     renderSteps(steps);
 
-    ensureDrivers(steps, force === true).then(function (meta) {
+    // Every "Find my best loads" click fetches FRESH — always re-sync settings and
+    // re-call the drivers API rather than reusing the cached availability, so the
+    // results reflect the current FleetYes settings + shifts on each run.
+    ensureDrivers(steps, true).then(function (meta) {
       if (!meta || !meta.count) {
         if (lastDriverErrorConfig) {
           // Missing settings (carrier code / token / search location) — point the
