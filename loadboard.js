@@ -15,7 +15,6 @@
   var driverCount = 0;
   var driverAt = null;
   var onlyMyDrivers = false; // "only my driver locations" filter — hide unmatched load cards
-  var fleetyesRefresh = false; // "Fleetyes refresh" bottom-bar toggle state
   var lastDriverError = null; // set by refreshDriversAsync on failure, shown in the "No drivers found" card
   var lastDriverErrorConfig = false; // true when lastDriverError is a config problem (missing settings)
   var lastAvailabilitySource = null; // "schedule-api" | "relay-trips-fallback" — from the last refresh
@@ -124,6 +123,9 @@
       "#rlb-only-mine .rlb-slider::before,#rlb-fleetyes-refresh .rlb-slider::before{content:\"\";position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s ease;}",
       "#rlb-only-mine .rlb-switch input:checked + .rlb-slider,#rlb-fleetyes-refresh .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
       "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before,#rlb-fleetyes-refresh .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
+      // Auto-refresh countdown chip — sits beside the Refresh toggle and shows
+      // the remaining seconds until the next automatic board refresh.
+      "#rlb-ar-countdown{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:600 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:rgb(0,104,141);box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
       // Hide non-matching load cards when the filter is on (data-attr = React-safe,
       // same approach as the highlight outline — we never touch Relay's child nodes).
       "[data-rlb-hidden]{display:none!important;}",
@@ -252,19 +254,27 @@
       schedulePaint();
     });
 
-    // "Fleetyes refresh" — a twin of the toggle above, placed to its LEFT by
-    // positionOnlyMine. State persists; the on/off action is a stub for now.
+    // "Refresh" toggle = the on-page Auto Refresh switch. Its checked state mirrors
+    // arEnabled (set by reflectAutoRefreshToggle); clicking it writes arEnabled to
+    // storage, which the storage.onChanged listener turns into start/stop. Placed
+    // by positionOnlyMine; the countdown chip sits beside it.
     var fy = document.createElement("label");
     fy.id = "rlb-fleetyes-refresh";
-    fy.title = "Refresh";
+    fy.title = "Auto refresh — refresh the board on a randomized timer";
     fy.innerHTML = '<span class="rlb-switch"><input id="rlb-fleetyes-refresh-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Refresh</span>';
     document.body.appendChild(fy);
     var fyCb = fy.querySelector("#rlb-fleetyes-refresh-cb");
-    fyCb.checked = fleetyesRefresh;
+    fyCb.checked = arEnabled;
     fyCb.addEventListener("change", function () {
-      fleetyesRefresh = fyCb.checked;
-      try { chrome.storage.local.set({ fleetyesRefresh: fleetyesRefresh }); } catch (e) { /* context invalidated */ }
+      try { chrome.storage.local.set({ arEnabled: !!fyCb.checked }); } catch (e) { /* context invalidated */ }
     });
+
+    // Countdown chip: remaining seconds until the next auto-refresh, shown beside
+    // the Refresh toggle. Text + visibility driven by the auto-refresh tick logic.
+    var arCd = document.createElement("span");
+    arCd.id = "rlb-ar-countdown";
+    arCd.title = "Time until the next automatic refresh";
+    document.body.appendChild(arCd);
 
     var card = document.createElement("div");
     card.id = "rlb-card";
@@ -367,6 +377,26 @@
     }
   }
 
+  // Hide Relay's native "Turn on auto-refresh" toggle + its label — the user's
+  // "Refresh" chip replaces that whole area. The switch stays in the DOM
+  // (display:none) so ensureAutoRefreshOff can still click it off; we hide it
+  // and the "…auto-refresh" label leaf.
+  function hideAutoRefreshToggle() {
+    var box = document.querySelector(".refresh-and-chat-box");
+    if (!box) return;
+    var sw = box.querySelector('input[role="switch"], [role="switch"]');
+    if (sw && sw.style.display !== "none") sw.style.display = "none";
+    var nodes = box.querySelectorAll("*");
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (n.children.length !== 0) continue;
+      var lt = (n.textContent || "").trim().toLowerCase();
+      if (lt && /auto[\s-]?refresh/.test(lt)) {
+        if (n.style.display !== "none") n.style.display = "none";
+      }
+    }
+  }
+
   function positionOnlyMine() {
     var only = document.getElementById("rlb-only-mine");
     if (!only) return;
@@ -398,17 +428,23 @@
         only.style.right = ""; only.style.bottom = "";
       }
     }
-    // Place the "Refresh" toggle at the right edge of the footer refresh/auto-
-    // refresh cluster — where "Last updated …" + its timer live (hidden by
-    // hideLastUpdated). Anchored to the cluster (not the timestamp) so it stays
-    // put once the timestamp is hidden. Falls back to just left of the "Only my
-    // driver locations" chip if the cluster isn't present.
+    // Place the "Refresh" toggle immediately to the LEFT of Relay's manual
+    // refresh icon (findRelayRefreshControl), on the same baseline. Falls back to
+    // the cluster's right edge, then to just left of the "Only my driver
+    // locations" chip, if the icon isn't found.
     var fy = document.getElementById("rlb-fleetyes-refresh");
     if (fy) {
+      var fyH = fy.offsetHeight || 34;
+      var iconBtn = findRelayRefreshControl();
+      var ir = iconBtn && iconBtn.getBoundingClientRect();
       var box2 = document.querySelector(".refresh-and-chat-box");
       var fr = box2 && box2.getBoundingClientRect();
-      if (fr && fr.width && fr.bottom > 0 && fr.top < window.innerHeight) {
-        var fyH = fy.offsetHeight || 34;
+      if (ir && ir.width && ir.bottom > 0 && ir.top < window.innerHeight) {
+        fy.style.top = Math.max(8, ir.top + (ir.height - fyH) / 2) + "px";
+        fy.style.left = "auto";
+        fy.style.right = Math.max(8, window.innerWidth - ir.left + 8) + "px";
+        fy.style.bottom = "auto";
+      } else if (fr && fr.width && fr.bottom > 0 && fr.top < window.innerHeight) {
         fy.style.top = Math.max(8, fr.top + (fr.height - fyH) / 2) + "px";
         fy.style.left = "auto";
         fy.style.right = Math.max(8, window.innerWidth - fr.right) + "px";
@@ -423,7 +459,19 @@
         }
       }
     }
+    // Place the countdown chip immediately to the LEFT of the Refresh toggle.
+    var arCdEl = document.getElementById("rlb-ar-countdown");
+    if (arCdEl && fy) {
+      var fRect = fy.getBoundingClientRect();
+      if (fRect.width) {
+        arCdEl.style.top = Math.max(8, fRect.top) + "px";
+        arCdEl.style.left = "auto";
+        arCdEl.style.right = Math.max(8, window.innerWidth - fRect.left + 8) + "px";
+        arCdEl.style.bottom = "auto";
+      }
+    }
     hideLastUpdated();
+    hideAutoRefreshToggle();
   }
 
   function showCard() {
@@ -514,13 +562,10 @@
   // checkbox, and repaint so the filter takes effect on the current board.
   function loadOnlyMinePref() {
     try {
-      chrome.storage.local.get(["onlyMyDrivers", "fleetyesRefresh"], function (r) {
+      chrome.storage.local.get(["onlyMyDrivers"], function (r) {
         onlyMyDrivers = !!r.onlyMyDrivers;
         var cb = document.getElementById("rlb-only-mine-cb");
         if (cb) cb.checked = onlyMyDrivers;
-        fleetyesRefresh = !!r.fleetyesRefresh;
-        var fyCb = document.getElementById("rlb-fleetyes-refresh-cb");
-        if (fyCb) fyCb.checked = fleetyesRefresh;
         schedulePaint();
       });
     } catch (e) { /* context invalidated */ }
@@ -1759,6 +1804,7 @@
     positionLauncher();
     ensureAutoRefreshOff();
     hideLastUpdated();
+    hideAutoRefreshToggle();
     var rows = loadRows();
     setPanel("rlb-rows", String(rows.length));
     clearPaint();
@@ -1894,6 +1940,11 @@
 
   var arRand = function (lo, hi) { return lo + Math.random() * (hi - lo); };
 
+  // Countdown-to-next-refresh state. nextRefreshAt is set each cycle in
+  // scheduleNextRefresh; a 1s interval (arCountdownTimer) ticks the chip text.
+  var nextRefreshAt = 0;
+  var arCountdownTimer = null;
+
   function clearAutoRefreshTimer() {
     if (arTimer) { clearTimeout(arTimer); arTimer = null; }
     if (arRescoreTimer) { clearTimeout(arRescoreTimer); arRescoreTimer = null; }
@@ -1902,11 +1953,38 @@
   // Min ≤ Max is required; refuse to run while the range is invalid.
   function autoRefreshRangeValid() { return arMin <= arMax; }
 
+  // Mirror arEnabled into the Refresh toggle checkbox + countdown visibility.
+  function reflectAutoRefreshToggle() {
+    var cb = document.getElementById("rlb-fleetyes-refresh-cb");
+    if (cb && cb.checked !== arEnabled) cb.checked = arEnabled;
+    var cd = document.getElementById("rlb-ar-countdown");
+    if (cd) cd.style.display = arEnabled ? "inline-flex" : "none";
+  }
+
+  function tickCountdown() {
+    var cd = document.getElementById("rlb-ar-countdown");
+    if (!cd) return;
+    var remaining = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
+    cd.textContent = remaining + "s";
+  }
+  function startCountdown() {
+    if (arCountdownTimer) return;
+    tickCountdown();
+    arCountdownTimer = setInterval(tickCountdown, 1000);
+  }
+  function stopCountdown() {
+    if (arCountdownTimer) { clearInterval(arCountdownTimer); arCountdownTimer = null; }
+    var cd = document.getElementById("rlb-ar-countdown");
+    if (cd) cd.textContent = "";
+  }
+
   // Schedule the next refresh at a random point in [arMin, arMax] seconds.
   function scheduleNextRefresh() {
     if (!arEnabled) return;
     var lo = Math.min(arMin, arMax), hi = Math.max(arMin, arMax);
     var waitMs = Math.round(arRand(lo, hi) * 1000);
+    nextRefreshAt = Date.now() + waitMs;
+    startCountdown();
     arTimer = setTimeout(function () {
       arTimer = null;
       doAutoRefresh();
@@ -1922,6 +2000,7 @@
 
   function stopAutoRefresh() {
     clearAutoRefreshTimer();
+    stopCountdown();
   }
 
   // Apply auto-refresh config (from storage): clamp, validate, and (re)start/stop.
@@ -1929,6 +2008,7 @@
     if (typeof r.arMin === "number") arMin = Math.min(Math.max(r.arMin, AR_MIN_S), AR_MAX_S);
     if (typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
     arEnabled = !!r.arEnabled && autoRefreshRangeValid();
+    reflectAutoRefreshToggle();
     if (arEnabled) startAutoRefresh(); else stopAutoRefresh();
   }
 

@@ -1424,9 +1424,9 @@ function ontrackApiRoot(cfg) {
 function activeDriverShiftsUrl(cfg) {
   return ontrackOrigin(cfg) + "/api/v1/active-driver-shifts";
 }
-// rlb-settings: {{base}}/v1/rlb-settings  (note: /v1, NOT /api/v1)
+// rlb-settings: {{base}}/int/v1/fleet-ops/rlb-settings
 function rlbSettingsUrl(cfg) {
-  return ontrackOrigin(cfg) + "/v1/rlb-settings";
+  return ontrackOrigin(cfg) + "/int/v1/fleet-ops/rlb-settings";
 }
 
 // ── RLB settings sync ─────────────────────────────────────────────────────────
