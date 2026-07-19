@@ -256,8 +256,8 @@
     // positionOnlyMine. State persists; the on/off action is a stub for now.
     var fy = document.createElement("label");
     fy.id = "rlb-fleetyes-refresh";
-    fy.title = "Fleetyes refresh";
-    fy.innerHTML = '<span class="rlb-switch"><input id="rlb-fleetyes-refresh-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Fleetyes refresh</span>';
+    fy.title = "Refresh";
+    fy.innerHTML = '<span class="rlb-switch"><input id="rlb-fleetyes-refresh-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Refresh</span>';
     document.body.appendChild(fy);
     var fyCb = fy.querySelector("#rlb-fleetyes-refresh-cb");
     fyCb.checked = fleetyesRefresh;
@@ -323,6 +323,50 @@
   // which tracks the scrolling search panel — this only runs on load + resize
   // (no scroll jitter). Falls back to the CSS bottom-right default until the
   // refresh control is present.
+  // Find Relay's "Last updated …" timestamp in the footer utility bar — the
+  // tightest element whose text contains "last updated". Returns null if absent.
+  function findLastUpdatedEl() {
+    var bar = document.getElementById("utility-bar") || document;
+    var nodes = bar.querySelectorAll("*");
+    var best = null;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var t = (n.textContent || "").trim();
+      if (t && /last updated/i.test(t)) {
+        if (!best || n.querySelectorAll("*").length < best.querySelectorAll("*").length) best = n;
+      }
+    }
+    return best;
+  }
+
+  // Hide Relay's native "Last updated …" label + its countdown timer — the user's
+  // "Refresh" chip takes that slot. Climb from the "last updated" text to the
+  // tightest container that also holds the timer, stopping before a parent that
+  // would swallow the auto-refresh toggle / chat button; also hide a right-side
+  // timer sibling in a flat layout. Re-applied on repaint because Relay re-renders
+  // the timer each second.
+  function hideLastUpdated() {
+    var el = findLastUpdatedEl();
+    if (!el) return;
+    var node = el;
+    while (node.parentElement) {
+      var p = node.parentElement;
+      var pt = (p.textContent || "").toLowerCase();
+      if (/auto[\s-]?refresh|chat|message|help|reload/.test(pt)) break;
+      if (p.querySelectorAll("*").length > 6) break;
+      node = p;
+    }
+    if (node.style.display !== "none") node.style.display = "none";
+    var sib = node.nextElementSibling;
+    while (sib) {
+      var st = (sib.textContent || "").trim();
+      if (st && /^\d/.test(st) && st.length <= 8) {
+        if (sib.style.display !== "none") sib.style.display = "none";
+        sib = sib.nextElementSibling;
+      } else break;
+    }
+  }
+
   function positionOnlyMine() {
     var only = document.getElementById("rlb-only-mine");
     if (!only) return;
@@ -354,19 +398,32 @@
         only.style.right = ""; only.style.bottom = "";
       }
     }
-    // Place the "Fleetyes refresh" toggle immediately to the LEFT of the
-    // "Only my driver locations" toggle, on the same baseline. Runs in every
-    // path so the two chips never overlap.
+    // Place the "Refresh" toggle at the right edge of the footer refresh/auto-
+    // refresh cluster — where "Last updated …" + its timer live (hidden by
+    // hideLastUpdated). Anchored to the cluster (not the timestamp) so it stays
+    // put once the timestamp is hidden. Falls back to just left of the "Only my
+    // driver locations" chip if the cluster isn't present.
     var fy = document.getElementById("rlb-fleetyes-refresh");
     if (fy) {
-      var oRect = only.getBoundingClientRect();
-      if (oRect.width) {
-        fy.style.top = Math.max(8, oRect.top) + "px";
+      var box2 = document.querySelector(".refresh-and-chat-box");
+      var fr = box2 && box2.getBoundingClientRect();
+      if (fr && fr.width && fr.bottom > 0 && fr.top < window.innerHeight) {
+        var fyH = fy.offsetHeight || 34;
+        fy.style.top = Math.max(8, fr.top + (fr.height - fyH) / 2) + "px";
         fy.style.left = "auto";
-        fy.style.right = Math.max(8, window.innerWidth - oRect.left + 10) + "px";
+        fy.style.right = Math.max(8, window.innerWidth - fr.right) + "px";
         fy.style.bottom = "auto";
+      } else {
+        var oRect = only.getBoundingClientRect();
+        if (oRect.width) {
+          fy.style.top = Math.max(8, oRect.top) + "px";
+          fy.style.left = "auto";
+          fy.style.right = Math.max(8, window.innerWidth - oRect.left + 10) + "px";
+          fy.style.bottom = "auto";
+        }
       }
     }
+    hideLastUpdated();
   }
 
   function showCard() {
@@ -1698,6 +1755,7 @@
     ensurePanel();
     positionLauncher();
     ensureAutoRefreshOff();
+    hideLastUpdated();
     var rows = loadRows();
     setPanel("rlb-rows", String(rows.length));
     clearPaint();
