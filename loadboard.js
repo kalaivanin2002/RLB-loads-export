@@ -1062,7 +1062,10 @@
   function refreshDriversAsync() {
     return new Promise(function (resolve) {
       try {
-        chrome.runtime.sendMessage({ type: "refresh-availability" }, function (res) {
+        // Carrier code comes from Relay's own page (#case-carrier-scac), not the
+        // popup — pass it to the background, which has no DOM access.
+        var carrierCode = readCarrierCode();
+        chrome.runtime.sendMessage({ type: "refresh-availability", carrierCode: carrierCode }, function (res) {
           if (chrome.runtime.lastError || !res || !res.ok) {
             var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unknown failure";
             logError("refreshDriversAsync", msg);
@@ -1095,7 +1098,8 @@
   function refreshUnassignedDriversAsync() {
     return new Promise(function (resolve) {
       try {
-        chrome.runtime.sendMessage({ type: "refresh-unassigned-drivers" }, function (res) {
+        var carrierCode = readCarrierCode();
+        chrome.runtime.sendMessage({ type: "refresh-unassigned-drivers", carrierCode: carrierCode }, function (res) {
           if (chrome.runtime.lastError || !res || !res.ok) {
             var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unknown failure";
             logError("refreshUnassignedDriversAsync", msg);
@@ -1462,7 +1466,8 @@
     syncSettings(function () {
     setPanel("rlb-msg", "Fetching trips…");
     try {
-      chrome.runtime.sendMessage({ type: "refresh-availability" }, function (res) {
+      var carrierCode = readCarrierCode();
+      chrome.runtime.sendMessage({ type: "refresh-availability", carrierCode: carrierCode }, function (res) {
         if (btn) { btn.disabled = false; btn.textContent = "Refresh drivers"; }
         if (chrome.runtime.lastError || !res || !res.ok) {
           var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "failed";

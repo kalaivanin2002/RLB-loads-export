@@ -1499,7 +1499,7 @@ async function syncRlbSettings(carrierCode) {
 // surfaces them to the user instead of quietly falling back to Relay trips.
 async function fetchDriverSchedule(cfg) {
   if (!cfg.carrierCode) {
-    const err = new Error("No carrier code set — enter it in Developer settings.");
+    const err = new Error("Carrier code not found on the Relay page — open a Relay Load Board page and try again.");
     err.config = true;
     throw err;
   }
@@ -2216,7 +2216,11 @@ function approvedPlacesUrl(cfg) {
 // of { name, city, latitude, longitude }. lat/lng are often 0 (not yet populated)
 // — callers must resolve the city to coordinates in that case.
 async function fetchApprovedPlaces(cfg) {
-  if (!cfg.carrierCode) throw new Error("No carrier_code set (Settings).");
+  if (!cfg.carrierCode) {
+    const err = new Error("Carrier code not found on the Relay page — open a Relay Load Board page and try again.");
+    err.config = true;
+    throw err;
+  }
   const url = approvedPlacesUrl(cfg) + "?carrier_code=" + encodeURIComponent(cfg.carrierCode);
   const res = await fetch(url, { headers: { Accept: "application/json", Authorization: "Bearer " + cfg.token } });
   const text = await res.text();
@@ -2403,8 +2407,12 @@ async function buildRelayUnassignedAvailability(tab, cfg) {
   return unassigned;
 }
 
-async function refreshAvailabilityOnly() {
+async function refreshAvailabilityOnly(carrierCode) {
   const cfg = await getConfig();
+  // Carrier code comes from Relay's page (#case-carrier-scac), passed in by the
+  // content script — NOT the popup. Inject it into cfg so every downstream call
+  // (shifts API, approved-places) reads cfg.carrierCode as before.
+  cfg.carrierCode = (carrierCode || "").trim();
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
   // Primary: shifts API (active-driver-shifts). A Relay tab is still needed to
@@ -2449,8 +2457,9 @@ async function refreshAvailabilityOnly() {
 // each other's cached data, each can be reused/refreshed independently, and
 // scoring/highlighting driven by plannerAvailability is unaffected by this
 // flow running.
-async function refreshUnassignedDriversOnly() {
+async function refreshUnassignedDriversOnly(carrierCode) {
   const cfg = await getConfig();
+  cfg.carrierCode = (carrierCode || "").trim(); // from Relay's page, not the popup
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
   // Primary: shifts API. Fallback: the original Relay unassigned-drivers flow.
@@ -2539,7 +2548,7 @@ async function scoreLoadsForPage(loads, mode) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
   if (msg.type === "refresh-availability") {
-    refreshAvailabilityOnly()
+    refreshAvailabilityOnly(msg.carrierCode)
       .then(sendResponse)
       .catch((e) => {
         logError("background/refresh-availability", e);
@@ -2557,7 +2566,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "refresh-unassigned-drivers") {
-    refreshUnassignedDriversOnly()
+    refreshUnassignedDriversOnly(msg.carrierCode)
       .then(sendResponse)
       .catch((e) => {
         logError("background/refresh-unassigned-drivers", e);

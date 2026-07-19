@@ -31,7 +31,8 @@
     relayBase: "https://relay.amazon.co.uk",
     ontrackUrl: "https://ontrack-api.agilecyber.com/api/v1/rlb-locations",
     token: "",
-    carrierCode: "",
+    // carrierCode is no longer stored here — it's read live from the Relay page
+    // (#case-carrier-scac) by the content script.
     // Local, popup-only setting — deliberately NOT synced from FleetYes.
     searchLocation: "",
   };
@@ -43,7 +44,6 @@
     searchLocation: $("searchLocation"),
     ontrackUrl: $("ontrackUrl"),
     token: $("token"),
-    carrierCode: $("carrierCode"),
     saveDev: $("saveDev"),
   };
 
@@ -53,7 +53,6 @@
       els.searchLocation.value = cfg.searchLocation || "";
       els.ontrackUrl.value = cfg.ontrackUrl;
       els.token.value = cfg.token;
-      els.carrierCode.value = cfg.carrierCode || "";
     });
   }
 
@@ -80,7 +79,6 @@
       relayBase: DEFAULTS.relayBase,
       ontrackUrl: els.ontrackUrl.value.trim() || DEFAULTS.ontrackUrl,
       token: els.token.value.trim(),
-      carrierCode: els.carrierCode.value.trim(),
     };
     chrome.storage.local.set(cfg, flashSaved);
   }
