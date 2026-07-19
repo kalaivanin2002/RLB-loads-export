@@ -17,6 +17,8 @@
   var onlyMyDrivers = false; // "only my driver locations" filter — hide unmatched load cards
   var lastDriverError = null; // set by refreshDriversAsync on failure, shown in the "No drivers found" card
   var lastDriverErrorConfig = false; // true when lastDriverError is a config problem (missing settings)
+  var lastAvailabilitySource = null; // "schedule-api" | "relay-trips-fallback" — from the last refresh
+  var lastApiError = null; // the shifts-API error message when we fell back to Relay trips
   var tip = null;
   var observer = null;
   var scheduled = false;
@@ -157,6 +159,7 @@
       "#rlb-card .actions button:disabled{opacity:.5;cursor:default;}",
       "#rlb-card .note{color:#94a3b8;font-size:12px;margin-top:12px;}",
       "#rlb-card .note.stale{color:#b45309;}",
+      "#rlb-card .note.fallback{color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 10px;line-height:1.4;}",
       "#rlb-card .adv{margin-top:12px;border-top:1px solid #eef2f6;padding-top:9px;}",
       "#rlb-card .adv summary{cursor:pointer;color:#94a3b8;font-size:12px;list-style:none;outline:none;}",
       "#rlb-card .adv summary::-webkit-details-marker{display:none;}",
@@ -208,23 +211,27 @@
       }
     });
 
-    var btnUnassigned = document.createElement("button");
-    btnUnassigned.id = "rlb-launch-unassigned";
-    btnUnassigned.type = "button";
-    btnUnassigned.innerHTML = '<span class="bolt">👤</span><span class="lbl">Find loads for unassigned drivers</span>';
-    btnUnassigned.title = "Find loads ONLY for drivers with no current trip (idle / unassigned).";
-    document.body.appendChild(btnUnassigned);
-    btnUnassigned.addEventListener("click", function () {
-      try {
-        runUnassignedDriversAutopilot();
-      } catch (e) {
-        console.log("[RLB] launch (unassigned) error:", e);
-        logError("launchUnassignedClick", e);
-        try { showCard(); cardError("Couldn't start", (e && e.message) ? e.message : String(e)); } catch (e2) {}
-        setLaunchBusy(false);
-        autofillBusy = false;
-      }
-    });
+    // "Find loads for unassigned drivers" (👤) is hidden for now — the button is
+    // not created, so it never appears and its handler never binds. The underlying
+    // runUnassignedDriversAutopilot() flow is left intact for easy re-enabling:
+    // just uncomment this block.
+    // var btnUnassigned = document.createElement("button");
+    // btnUnassigned.id = "rlb-launch-unassigned";
+    // btnUnassigned.type = "button";
+    // btnUnassigned.innerHTML = '<span class="bolt">👤</span><span class="lbl">Find loads for unassigned drivers</span>';
+    // btnUnassigned.title = "Find loads ONLY for drivers with no current trip (idle / unassigned).";
+    // document.body.appendChild(btnUnassigned);
+    // btnUnassigned.addEventListener("click", function () {
+    //   try {
+    //     runUnassignedDriversAutopilot();
+    //   } catch (e) {
+    //     console.log("[RLB] launch (unassigned) error:", e);
+    //     logError("launchUnassignedClick", e);
+    //     try { showCard(); cardError("Couldn't start", (e && e.message) ? e.message : String(e)); } catch (e2) {}
+    //     setLaunchBusy(false);
+    //     autofillBusy = false;
+    //   }
+    // });
 
     // "Only my driver locations" filter — when checked, hide every load card that
     // isn't matched to one of your drivers. Reflects the persisted `onlyMyDrivers`
@@ -359,6 +366,16 @@
       return '<div class="step ' + s.state + '"><span class="ic">' + ic + "</span><span>" + esc(s.label) + "</span></div>";
     }).join("");
     setCard(html);
+  }
+
+  // Same steps list, but with the API-fallback banner shown ABOVE it — used the
+  // moment we know the shifts API failed, before the Relay-fallback search runs.
+  function renderStepsWithFallback(steps) {
+    var stepsHtml = steps.map(function (s) {
+      var ic = s.state === "done" ? "✓" : (s.state === "active" ? '<span class="spin"></span>' : "○");
+      return '<div class="step ' + s.state + '"><span class="ic">' + ic + "</span><span>" + esc(s.label) + "</span></div>";
+    }).join("");
+    setCard(fallbackNoteHtml() + stepsHtml);
   }
 
   // The debug tools (kept, just tucked away) — rendered inside the result card.
@@ -1058,7 +1075,10 @@
   function refreshDriversAsync() {
     return new Promise(function (resolve) {
       try {
-        chrome.runtime.sendMessage({ type: "refresh-availability" }, function (res) {
+        // Carrier code comes from Relay's own page (#case-carrier-scac), not the
+        // popup — pass it to the background, which has no DOM access.
+        var carrierCode = readCarrierCode();
+        chrome.runtime.sendMessage({ type: "refresh-availability", carrierCode: carrierCode }, function (res) {
           if (chrome.runtime.lastError || !res || !res.ok) {
             var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unknown failure";
             logError("refreshDriversAsync", msg);
@@ -1070,6 +1090,8 @@
           lastDriverError = null;
           lastDriverErrorConfig = false;
           driverCount = res.count || 0; driverAt = Date.now();
+          lastAvailabilitySource = res.source || "schedule-api";
+          lastApiError = res.apiError || null;
           // Log which availability source ran so a silent fallback to Relay trips
           // (instead of the shifts API) is obvious in the page console.
           if (res.source === "relay-trips-fallback") {
@@ -1091,7 +1113,8 @@
   function refreshUnassignedDriversAsync() {
     return new Promise(function (resolve) {
       try {
-        chrome.runtime.sendMessage({ type: "refresh-unassigned-drivers" }, function (res) {
+        var carrierCode = readCarrierCode();
+        chrome.runtime.sendMessage({ type: "refresh-unassigned-drivers", carrierCode: carrierCode }, function (res) {
           if (chrome.runtime.lastError || !res || !res.ok) {
             var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unknown failure";
             logError("refreshUnassignedDriversAsync", msg);
@@ -1138,13 +1161,14 @@
     return new Promise(function (resolve) {
       try {
         chrome.storage.local.get(
-          ["plannerAvailability", "plannerAvailabilityAt", "plannerAvailabilitySearchLocation", "searchLocation"],
+          ["plannerAvailability", "plannerAvailabilityAt", "plannerAvailabilitySearchLocation", "searchLocation", "plannerAvailabilitySource"],
           function (r) {
             var cachedLoc = (r.plannerAvailabilitySearchLocation || "").trim().toLowerCase();
             var currentLoc = (r.searchLocation || "").trim().toLowerCase();
             resolve({
               count: (r.plannerAvailability || []).length,
               at: r.plannerAvailabilityAt || null,
+              source: r.plannerAvailabilitySource || null,
               // Cache is stale if it was built for a different Search Location.
               searchLocationChanged: cachedLoc !== currentLoc,
             });
@@ -1172,9 +1196,14 @@
       }
       steps[0].state = "active"; steps[0].label = force ? "Refreshing driver details" : "Fetching driver details";
       renderSteps(steps);
-      return refreshDriversAsync().then(function (count) {
-        steps[0].state = "done"; steps[1].state = "done"; renderSteps(steps);
-        return { count: count, at: Date.now() };
+      // Pull the latest planning rules / scoring weights from FleetYes (rlb-settings)
+      // BEFORE fetching drivers, so the fresh availability is built + scored with the
+      // current server settings. Best-effort — a sync failure never blocks the fetch.
+      return syncSettingsAsync().then(function () {
+        return refreshDriversAsync().then(function (count) {
+          steps[0].state = "done"; steps[1].state = "done"; renderSteps(steps);
+          return { count: count, at: Date.now() };
+        });
       });
     });
   }
@@ -1206,12 +1235,24 @@
         return null;
       }
       driverCount = meta.count; driverAt = meta.at;
+      // When drivers were reused from cache (no fresh refresh), refreshDriversAsync
+      // didn't run, so pull the source from the cached meta so the fallback banner
+      // still reflects how those drivers were actually obtained.
+      if (meta.source) lastAvailabilitySource = meta.source;
       return getAvailability().then(function (list) {
         var cities = buildCityList(list);
         if (!cities.length) { cardError("No drivers to search from.", "None of your drivers had a usable drop-off location (Advanced → View drivers)."); return null; }
 
         batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
         roundIdx = 0;
+        // If the shifts API failed and we're on the Relay-trips fallback, surface the
+        // reason on the card NOW — before the fallback searches start — so the user
+        // sees why we're searching Relay driver locations instead of the Search
+        // Location. Brief pause so the banner is readable before tabs start opening.
+        if (lastAvailabilitySource === "relay-trips-fallback") {
+          renderStepsWithFallback(steps);
+          return delay(1600).then(function () { return runAllRounds(steps, cities); });
+        }
         return runAllRounds(steps, cities);
       });
     }).catch(function (e) {
@@ -1345,6 +1386,19 @@
     }
   }
 
+  // When the shifts API failed and we fell back to Relay trips, explain WHY on the
+  // card so the user knows the driver list came from Relay (their trip drop-offs),
+  // not the FleetYes schedule + Search Location. Empty string when the API worked.
+  function fallbackNoteHtml() {
+    if (lastAvailabilitySource !== "relay-trips-fallback") return "";
+    return (
+      '<div class="note fallback">⚠ Driver shifts unavailable' +
+      (lastApiError ? " (" + esc(lastApiError) + ")" : "") +
+      " — likely no drivers set up for this carrier in FleetYes, or the carrier isn’t registered yet. " +
+      "Showing drivers read from Relay trips instead, searched from each driver’s own location.</div>"
+    );
+  }
+
   function showRoundResult(cities) {
     var n = countHighlighted();
     var roundLabel = batches.length > 1 ? ("Location " + (roundIdx + 1) + " of " + batches.length + " · ") : "";
@@ -1360,6 +1414,7 @@
       "</div>" +
       '<div class="note' + (isStale(driverAt) ? " stale" : "") + '">Drivers as of ' + esc(dtUK(driverAt)) +
       (isStale(driverAt) ? " · may be out of date — Advanced → Refresh drivers" : "") + "</div>" +
+      fallbackNoteHtml() +
       advancedHtml()
     );
     matchList = [].slice.call(document.querySelectorAll("[data-rlb-match]"));
@@ -1417,12 +1472,59 @@
     } catch (e) { /* context invalidated */ }
   }
 
+  // Read the carrier SCAC that Relay embeds in a hidden input on every page.
+  // <input type="hidden" id="case-carrier-scac" value="AMYSL" …>
+  function readCarrierCode() {
+    var el = document.getElementById("case-carrier-scac");
+    var v = el && el.value ? String(el.value).trim() : "";
+    return v || null;
+  }
+
+  // Pull the latest RLB settings for this carrier from FleetYes and merge them
+  // into the extension's storage before a run, so scoring uses server values.
+  // Best-effort: a failure here must not block the drivers refresh — we log it
+  // and carry on with whatever settings are already in storage.
+  function syncSettings(done) {
+    var carrierCode = readCarrierCode();
+    if (!carrierCode) {
+      logError("syncSettings", "carrier code not found on page (#case-carrier-scac)");
+      done();
+      return;
+    }
+    try {
+      chrome.runtime.sendMessage({ type: "sync-rlb-settings", carrierCode: carrierCode }, function (res) {
+        if (chrome.runtime.lastError || !res || !res.ok) {
+          var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "failed";
+          logError("syncSettings", msg);
+        } else {
+          console.log("[RLB board] rlb-settings synced (" + (res.applied != null ? res.applied + " key(s)" : "ok") + ").");
+        }
+        done();
+      });
+    } catch (e) {
+      logError("syncSettings", e);
+      done();
+    }
+  }
+
+  // Promise wrapper around syncSettings — resolves once the sync completes
+  // (success OR best-effort failure), so the autopilot can await it before fetching.
+  function syncSettingsAsync() {
+    return new Promise(function (resolve) {
+      try { syncSettings(resolve); } catch (e) { logError("syncSettingsAsync", e); resolve(); }
+    });
+  }
+
   function refreshDrivers() {
     var btn = document.getElementById("rlb-refresh");
     if (btn) { btn.disabled = true; btn.textContent = "Refreshing…"; }
+    setPanel("rlb-msg", "Syncing settings…");
+    // Sync server settings first, then fetch trips with those settings applied.
+    syncSettings(function () {
     setPanel("rlb-msg", "Fetching trips…");
     try {
-      chrome.runtime.sendMessage({ type: "refresh-availability" }, function (res) {
+      var carrierCode = readCarrierCode();
+      chrome.runtime.sendMessage({ type: "refresh-availability", carrierCode: carrierCode }, function (res) {
         if (btn) { btn.disabled = false; btn.textContent = "Refresh drivers"; }
         if (chrome.runtime.lastError || !res || !res.ok) {
           var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "failed";
@@ -1441,6 +1543,7 @@
       logError("refreshDriversButton", e);
       setPanel("rlb-msg", "Extension reloaded — refresh the page.");
     }
+    }); // end syncSettings
   }
 
   // ── scoring ────────────────────────────────────────────────────────────────────

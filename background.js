@@ -1417,6 +1417,88 @@ function ontrackApiRoot(cfg) {
 function activeDriverShiftsUrl(cfg) {
   return ontrackApiRoot(cfg) + "/active-driver-shifts";
 }
+// The rlb-settings API lives on the SAME host as ontrackUrl but under a different
+// path prefix: /int/v1 (not /api/v1). Derive the scheme+host from ontrackUrl and
+// append the fixed /int/v1/fleet-ops/rlb-settings path.
+function rlbSettingsUrl(cfg) {
+  const raw = (cfg.ontrackUrl || "").replace(/\/+$/, "");
+  let origin = raw;
+  try { origin = new URL(raw).origin; } // scheme + host, drops any /api/v1/... path
+  catch (e) { origin = raw.replace(/(\/\/[^/]+).*$/, "$1"); } // fallback: keep up to host
+  return origin + "/int/v1/fleet-ops/rlb-settings";
+}
+
+// ── RLB settings sync ─────────────────────────────────────────────────────────
+// The FleetYes dashboard is the editor for the planning rules + developer
+// settings; the backend is the source of truth. Here we GET them for this
+// carrier and MERGE the two groups into chrome.storage.local, so the rest of the
+// workflow (getConfig) picks them up unchanged. The popup no longer edits these
+// keys — they come from the server.
+//
+// The carrier code is read off the Relay page (#case-carrier-scac) and passed in
+// by loadboard.js. Missing carrier code / token are CONFIG errors so the caller
+// can surface them instead of silently running on stale local values.
+//
+// Only the keys the server owns are written; local-only keys (token, ontrackUrl,
+// carrierCode, the harvest knobs, etc.) are left untouched.
+// NOTE: searchLocation is deliberately NOT here — it is a LOCAL, popup-only
+// setting the user enters per browser, so the FleetYes sync must never overwrite
+// it. All the other planning rules are server-owned.
+const RLB_SERVER_PLANNING_KEYS = [
+  "nearbyRadius", "minTripMiles", "restHours",
+  "availabilityLeadHours", "maxWaitHours", "gapBeforeNextHours",
+  "deadheadMph", "matchEquipment",
+];
+const RLB_SERVER_DEVELOPER_KEYS = [
+  "useFleetyesPlaces", "arEnabled", "arMin", "arMax",
+  "weightPayout", "weightRate", "weightDeadhead", "weightTiming", "weightReposition",
+];
+
+async function fetchRlbSettings(cfg, carrierCode) {
+  if (!carrierCode) {
+    const err = new Error("No carrier code found on the Relay page (#case-carrier-scac).");
+    err.config = true;
+    throw err;
+  }
+  if (!cfg.token) {
+    const err = new Error("No API token set — enter the Bearer token in Developer settings.");
+    err.config = true;
+    throw err;
+  }
+  const url = rlbSettingsUrl(cfg) + "?carrier_code=" + encodeURIComponent(carrierCode);
+  const res = await fetch(url, { headers: { Accept: "application/json", Authorization: "Bearer " + cfg.token } });
+  const text = await res.text();
+  if (!res.ok) {
+    const err = new Error("rlb-settings HTTP " + res.status + ": " + text.slice(0, 200));
+    await logError("background/fetchRlbSettings", err, { url: url, status: res.status });
+    throw err;
+  }
+  let data;
+  try { data = JSON.parse(text); } catch (e) { throw new Error("rlb-settings response was not JSON"); }
+  return data && typeof data === "object" ? data : {};
+}
+
+// GET the server settings for this carrier and merge them into storage.
+// Returns { ok, applied } where `applied` is the count of keys written.
+async function syncRlbSettings(carrierCode) {
+  const cfg = await getConfig();
+  const data = await fetchRlbSettings(cfg, carrierCode);
+  const planning = (data && data.planningRules)     || {};
+  const developer = (data && data.developerSettings) || {};
+
+  const patch = {};
+  for (const k of RLB_SERVER_PLANNING_KEYS)  { if (k in planning)  patch[k] = planning[k]; }
+  for (const k of RLB_SERVER_DEVELOPER_KEYS) { if (k in developer) patch[k] = developer[k]; }
+
+  // arEnabled is only safe with a valid interval range — mirror the dashboard guard.
+  if ("arMin" in patch && "arMax" in patch && numOr(patch.arMin, 0) > numOr(patch.arMax, 0)) {
+    patch.arEnabled = false;
+  }
+
+  const applied = Object.keys(patch).length;
+  if (applied > 0) await chrome.storage.local.set(patch);
+  return { ok: true, applied: applied };
+}
 
 // Fetch the carrier's active driver shifts. Uses the same auth as the other
 // OnTrack/FleetYes calls (carrier_code query + Bearer token from settings).
@@ -1424,7 +1506,7 @@ function activeDriverShiftsUrl(cfg) {
 // surfaces them to the user instead of quietly falling back to Relay trips.
 async function fetchDriverSchedule(cfg) {
   if (!cfg.carrierCode) {
-    const err = new Error("No carrier code set — enter it in Developer settings.");
+    const err = new Error("Carrier code not found on the Relay page — open a Relay Load Board page and try again.");
     err.config = true;
     throw err;
   }
@@ -2141,7 +2223,11 @@ function approvedPlacesUrl(cfg) {
 // of { name, city, latitude, longitude }. lat/lng are often 0 (not yet populated)
 // — callers must resolve the city to coordinates in that case.
 async function fetchApprovedPlaces(cfg) {
-  if (!cfg.carrierCode) throw new Error("No carrier_code set (Settings).");
+  if (!cfg.carrierCode) {
+    const err = new Error("Carrier code not found on the Relay page — open a Relay Load Board page and try again.");
+    err.config = true;
+    throw err;
+  }
   const url = approvedPlacesUrl(cfg) + "?carrier_code=" + encodeURIComponent(cfg.carrierCode);
   const res = await fetch(url, { headers: { Accept: "application/json", Authorization: "Bearer " + cfg.token } });
   const text = await res.text();
@@ -2328,8 +2414,12 @@ async function buildRelayUnassignedAvailability(tab, cfg) {
   return unassigned;
 }
 
-async function refreshAvailabilityOnly() {
+async function refreshAvailabilityOnly(carrierCode) {
   const cfg = await getConfig();
+  // Carrier code comes from Relay's page (#case-carrier-scac), passed in by the
+  // content script — NOT the popup. Inject it into cfg so every downstream call
+  // (shifts API, approved-places) reads cfg.carrierCode as before.
+  cfg.carrierCode = (carrierCode || "").trim();
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
   // Primary: shifts API (active-driver-shifts). A Relay tab is still needed to
@@ -2345,7 +2435,13 @@ async function refreshAvailabilityOnly() {
     if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
     apiError = (e && e.message) || String(e);
     console.warn("[RLB availability] ✗ shifts API FAILED (" + apiError + ") — falling back to Relay trips.");
-    await log("loads", "Shifts API failed (" + apiError + ") — using Relay trips instead.", "warn");
+    await log(
+      "loads",
+      "Driver shifts API unavailable (" + apiError + "). This usually means no drivers are set up for this " +
+      "carrier in FleetYes, or the carrier isn't registered yet. Falling back to reading drivers from Relay " +
+      "trips and searching each driver's location in its own tab.",
+      "warn"
+    );
     try {
       availability = await buildRelayTripsAvailability(tab, cfg);
       source = "relay-trips-fallback";
@@ -2374,8 +2470,9 @@ async function refreshAvailabilityOnly() {
 // each other's cached data, each can be reused/refreshed independently, and
 // scoring/highlighting driven by plannerAvailability is unaffected by this
 // flow running.
-async function refreshUnassignedDriversOnly() {
+async function refreshUnassignedDriversOnly(carrierCode) {
   const cfg = await getConfig();
+  cfg.carrierCode = (carrierCode || "").trim(); // from Relay's page, not the popup
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
   // Primary: shifts API. Fallback: the original Relay unassigned-drivers flow.
@@ -2464,7 +2561,7 @@ async function scoreLoadsForPage(loads, mode) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
   if (msg.type === "refresh-availability") {
-    refreshAvailabilityOnly()
+    refreshAvailabilityOnly(msg.carrierCode)
       .then(sendResponse)
       .catch((e) => {
         logError("background/refresh-availability", e);
@@ -2482,11 +2579,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "refresh-unassigned-drivers") {
-    refreshUnassignedDriversOnly()
+    refreshUnassignedDriversOnly(msg.carrierCode)
       .then(sendResponse)
       .catch((e) => {
         logError("background/refresh-unassigned-drivers", e);
         sendResponse({ ok: false, error: String((e && e.message) || e) });
+      });
+    return true;
+  }
+  if (msg.type === "sync-rlb-settings") {
+    syncRlbSettings(msg.carrierCode)
+      .then(sendResponse)
+      .catch((e) => {
+        logError("background/sync-rlb-settings", e);
+        sendResponse({ ok: false, error: String((e && e.message) || e), config: !!(e && e.config) });
       });
     return true;
   }
