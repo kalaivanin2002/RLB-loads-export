@@ -2428,7 +2428,13 @@ async function refreshAvailabilityOnly(carrierCode) {
     if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
     apiError = (e && e.message) || String(e);
     console.warn("[RLB availability] ✗ shifts API FAILED (" + apiError + ") — falling back to Relay trips.");
-    await log("loads", "Shifts API failed (" + apiError + ") — using Relay trips instead.", "warn");
+    await log(
+      "loads",
+      "Driver shifts API unavailable (" + apiError + "). This usually means no drivers are set up for this " +
+      "carrier in FleetYes, or the carrier isn't registered yet. Falling back to reading drivers from Relay " +
+      "trips and searching each driver's location in its own tab.",
+      "warn"
+    );
     try {
       availability = await buildRelayTripsAvailability(tab, cfg);
       source = "relay-trips-fallback";

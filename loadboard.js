@@ -17,6 +17,8 @@
   var onlyMyDrivers = false; // "only my driver locations" filter — hide unmatched load cards
   var lastDriverError = null; // set by refreshDriversAsync on failure, shown in the "No drivers found" card
   var lastDriverErrorConfig = false; // true when lastDriverError is a config problem (missing settings)
+  var lastAvailabilitySource = null; // "schedule-api" | "relay-trips-fallback" — from the last refresh
+  var lastApiError = null; // the shifts-API error message when we fell back to Relay trips
   var tip = null;
   var observer = null;
   var scheduled = false;
@@ -157,6 +159,7 @@
       "#rlb-card .actions button:disabled{opacity:.5;cursor:default;}",
       "#rlb-card .note{color:#94a3b8;font-size:12px;margin-top:12px;}",
       "#rlb-card .note.stale{color:#b45309;}",
+      "#rlb-card .note.fallback{color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 10px;line-height:1.4;}",
       "#rlb-card .adv{margin-top:12px;border-top:1px solid #eef2f6;padding-top:9px;}",
       "#rlb-card .adv summary{cursor:pointer;color:#94a3b8;font-size:12px;list-style:none;outline:none;}",
       "#rlb-card .adv summary::-webkit-details-marker{display:none;}",
@@ -1077,6 +1080,8 @@
           lastDriverError = null;
           lastDriverErrorConfig = false;
           driverCount = res.count || 0; driverAt = Date.now();
+          lastAvailabilitySource = res.source || "schedule-api";
+          lastApiError = res.apiError || null;
           // Log which availability source ran so a silent fallback to Relay trips
           // (instead of the shifts API) is obvious in the page console.
           if (res.source === "relay-trips-fallback") {
@@ -1353,6 +1358,19 @@
     }
   }
 
+  // When the shifts API failed and we fell back to Relay trips, explain WHY on the
+  // card so the user knows the driver list came from Relay (their trip drop-offs),
+  // not the FleetYes schedule + Search Location. Empty string when the API worked.
+  function fallbackNoteHtml() {
+    if (lastAvailabilitySource !== "relay-trips-fallback") return "";
+    return (
+      '<div class="note fallback">⚠ Driver shifts unavailable' +
+      (lastApiError ? " (" + esc(lastApiError) + ")" : "") +
+      " — likely no drivers set up for this carrier in FleetYes, or the carrier isn’t registered yet. " +
+      "Showing drivers read from Relay trips instead, searched from each driver’s own location.</div>"
+    );
+  }
+
   function showRoundResult(cities) {
     var n = countHighlighted();
     var roundLabel = batches.length > 1 ? ("Location " + (roundIdx + 1) + " of " + batches.length + " · ") : "";
@@ -1368,6 +1386,7 @@
       "</div>" +
       '<div class="note' + (isStale(driverAt) ? " stale" : "") + '">Drivers as of ' + esc(dtUK(driverAt)) +
       (isStale(driverAt) ? " · may be out of date — Advanced → Refresh drivers" : "") + "</div>" +
+      fallbackNoteHtml() +
       advancedHtml()
     );
     matchList = [].slice.call(document.querySelectorAll("[data-rlb-match]"));
