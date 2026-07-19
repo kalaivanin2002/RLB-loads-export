@@ -368,6 +368,16 @@
     setCard(html);
   }
 
+  // Same steps list, but with the API-fallback banner shown ABOVE it — used the
+  // moment we know the shifts API failed, before the Relay-fallback search runs.
+  function renderStepsWithFallback(steps) {
+    var stepsHtml = steps.map(function (s) {
+      var ic = s.state === "done" ? "✓" : (s.state === "active" ? '<span class="spin"></span>' : "○");
+      return '<div class="step ' + s.state + '"><span class="ic">' + ic + "</span><span>" + esc(s.label) + "</span></div>";
+    }).join("");
+    setCard(fallbackNoteHtml() + stepsHtml);
+  }
+
   // The debug tools (kept, just tucked away) — rendered inside the result card.
   function advancedHtml() {
     return (
@@ -1151,13 +1161,14 @@
     return new Promise(function (resolve) {
       try {
         chrome.storage.local.get(
-          ["plannerAvailability", "plannerAvailabilityAt", "plannerAvailabilitySearchLocation", "searchLocation"],
+          ["plannerAvailability", "plannerAvailabilityAt", "plannerAvailabilitySearchLocation", "searchLocation", "plannerAvailabilitySource"],
           function (r) {
             var cachedLoc = (r.plannerAvailabilitySearchLocation || "").trim().toLowerCase();
             var currentLoc = (r.searchLocation || "").trim().toLowerCase();
             resolve({
               count: (r.plannerAvailability || []).length,
               at: r.plannerAvailabilityAt || null,
+              source: r.plannerAvailabilitySource || null,
               // Cache is stale if it was built for a different Search Location.
               searchLocationChanged: cachedLoc !== currentLoc,
             });
@@ -1219,12 +1230,24 @@
         return null;
       }
       driverCount = meta.count; driverAt = meta.at;
+      // When drivers were reused from cache (no fresh refresh), refreshDriversAsync
+      // didn't run, so pull the source from the cached meta so the fallback banner
+      // still reflects how those drivers were actually obtained.
+      if (meta.source) lastAvailabilitySource = meta.source;
       return getAvailability().then(function (list) {
         var cities = buildCityList(list);
         if (!cities.length) { cardError("No drivers to search from.", "None of your drivers had a usable drop-off location (Advanced → View drivers)."); return null; }
 
         batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
         roundIdx = 0;
+        // If the shifts API failed and we're on the Relay-trips fallback, surface the
+        // reason on the card NOW — before the fallback searches start — so the user
+        // sees why we're searching Relay driver locations instead of the Search
+        // Location. Brief pause so the banner is readable before tabs start opening.
+        if (lastAvailabilitySource === "relay-trips-fallback") {
+          renderStepsWithFallback(steps);
+          return delay(1600).then(function () { return runAllRounds(steps, cities); });
+        }
         return runAllRounds(steps, cities);
       });
     }).catch(function (e) {
