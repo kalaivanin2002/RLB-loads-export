@@ -114,7 +114,7 @@
       "#rlb-launch-unassigned.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
       // "Only my driver locations" filter chip — a slider-style toggle + label.
       "#rlb-only-mine,#rlb-only-mine *{box-sizing:border-box;}",
-      "#rlb-only-mine{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);cursor:pointer;user-select:none;}",
+      "#rlb-only-mine{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);cursor:pointer;user-select:none;}",
       // Toggle switch: the real checkbox is transparent on top; the slider draws the UI.
       "#rlb-only-mine .rlb-switch{position:relative;display:inline-block;width:34px;height:18px;flex:none;}",
       "#rlb-only-mine .rlb-switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;}",
@@ -265,6 +265,13 @@
     positionLauncher();
     window.addEventListener("scroll", positionLauncher, true);
     window.addEventListener("resize", positionLauncher);
+
+    // The "Only my driver locations" toggle is a fixed control next to the refresh
+    // button at the bottom; the footer is viewport-fixed, so track resize (not
+    // scroll). Retry once shortly after load — the utility bar renders after us.
+    positionOnlyMine();
+    window.addEventListener("resize", positionOnlyMine);
+    window.setTimeout(positionOnlyMine, 1200);
   }
 
   // Anchor the floating launcher to the search panel's top-right so it reads as
@@ -289,37 +296,37 @@
       bf.style.top = b.style.top;
       bf.style.right = Math.max(12, window.innerWidth - br.left + 10) + "px";
     }
-    // The filter chip sits INLINE on the search panel's fields row, in the empty gap
-    // to the right of the "Search loads" button (before "Saved searches"), vertically
-    // centred on the inputs. We can't inject into the React panel, so we overlay a
-    // fixed element aligned to the fields' boxes. Fall back to below-Origin, then to
-    // the panel's bottom-left, if those anchors aren't found.
+    // NOTE: the "Only my driver locations" toggle used to be overlaid inline on
+    // this search panel; it now lives as a fixed control next to the refresh
+    // button at the bottom of the page — see positionOnlyMine below.
+  }
+
+  // Pin the "Only my driver locations" toggle as a fixed control next to Relay's
+  // manual refresh button at the bottom of the page (inside .refresh-and-chat-box
+  // / #utility-bar). That footer is viewport-fixed, so — unlike the launcher,
+  // which tracks the scrolling search panel — this only runs on load + resize
+  // (no scroll jitter). Falls back to the CSS bottom-right default until the
+  // refresh control is present.
+  function positionOnlyMine() {
     var only = document.getElementById("rlb-only-mine");
-    if (only) {
-      only.style.right = "auto";
-      var originEl = document.getElementById("rlb-origin-city-filter");
-      var oref = originEl && originEl.getBoundingClientRect();
-      // "Search loads" has no stable id — find it by its label text within the panel.
-      var searchBtn = null, panelEl = anchor.closest ? (anchor.closest(".search__panel") || anchor) : anchor;
-      var btns = (panelEl || document).querySelectorAll("button");
-      for (var bi = 0; bi < btns.length; bi++) {
-        if ((btns[bi].textContent || "").trim().toLowerCase() === "search loads") { searchBtn = btns[bi]; break; }
-      }
-      var sref = searchBtn && searchBtn.getBoundingClientRect();
-      var eqEl = document.getElementById("equipment-trailer-filter");
-      var eref = eqEl && eqEl.getBoundingClientRect();
-      var anchorRight = (sref && sref.width) ? sref.right : ((eref && eref.width) ? eref.right : null);
-      if (anchorRight != null && oref && oref.width) {
-        only.style.left = (anchorRight + 16) + "px";
-        only.style.top = (oref.top + (oref.height - only.offsetHeight) / 2) + "px";
-      } else if (oref && oref.width) {
-        only.style.left = Math.max(8, oref.left) + "px";
-        only.style.top = (oref.bottom + 8) + "px";
-      } else {
-        only.style.left = Math.max(8, r.left + 12) + "px";
-        only.style.top = Math.max(8, r.bottom - only.offsetHeight - 12) + "px";
-      }
+    if (!only) return;
+    var refresh = findRelayRefreshControl();
+    var anchorEl = refresh || document.querySelector(".refresh-and-chat-box");
+    if (!anchorEl) {
+      // Not rendered yet — clear any prior overrides so the CSS default applies.
+      only.style.top = "auto"; only.style.left = "auto";
+      only.style.right = ""; only.style.bottom = "";
+      return;
     }
+    var r = anchorEl.getBoundingClientRect();
+    // Footer scrolled out of view → leave the CSS bottom-right default in place.
+    if (!r.width || r.top >= window.innerHeight || r.bottom <= 0) return;
+    var onlyH = only.offsetHeight || 34;
+    var center = r.top + r.height / 2;
+    only.style.top = Math.max(8, center - onlyH / 2) + "px";
+    only.style.left = "auto";
+    only.style.right = Math.max(8, window.innerWidth - r.left + 10) + "px";
+    only.style.bottom = "auto";
   }
 
   function showCard() {
