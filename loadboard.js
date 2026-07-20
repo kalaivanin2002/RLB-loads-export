@@ -454,10 +454,12 @@
     if (haveIcon) {
       // Countdown left of the (shifted) icon — positioned even while hidden, so ready.
       placeLeft(arCdEl, irS, 8);
-      // Refresh toggle left of the countdown when it's visible, else left of the icon.
-      var cdRect = arCdEl && arCdEl.getBoundingClientRect();
-      var fyAnchor = (cdRect && cdRect.width) ? cdRect : irS;
-      var placedFy = placeLeft(fy, fyAnchor, 8);
+      // Always reserve the countdown's slot (its stable width, even while hidden)
+      // so the toggle never overlaps it. offsetWidth is 0 while display:none → fall
+      // back to the CSS min-width (160), which matches the visible width.
+      var cdW = (arCdEl && arCdEl.offsetWidth) || 160;
+      var cdSlot = { top: irS.top, height: irS.height, width: cdW, bottom: irS.bottom, left: irS.left - 8 - cdW, right: irS.left - 8 };
+      var placedFy = placeLeft(fy, cdSlot, 8);
       // "Only my drivers" left of the Refresh toggle (or the icon if no toggle).
       placeLeft(only, (placedFy && fy) ? fy.getBoundingClientRect() : irS, 10);
     } else if (haveCluster && fy) {
