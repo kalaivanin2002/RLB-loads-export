@@ -279,13 +279,6 @@
     arCd.title = "Time until the next automatic refresh";
     document.body.appendChild(arCd);
 
-    // "Next Refresh" label — placed to the LEFT of the countdown (only while the
-    // Refresh toggle is on).
-    var nrLbl = document.createElement("span");
-    nrLbl.id = "rlb-next-refresh-label";
-    nrLbl.textContent = "Next Refresh";
-    document.body.appendChild(nrLbl);
-
     var card = document.createElement("div");
     card.id = "rlb-card";
     card.innerHTML =
@@ -490,17 +483,6 @@
         arCdEl.style.left = "auto";
         arCdEl.style.right = Math.max(8, window.innerWidth - fRect.left + 8) + "px";
         arCdEl.style.bottom = "auto";
-      }
-    }
-    // Place the "Next Refresh" label immediately to the LEFT of the countdown.
-    var nrEl = document.getElementById("rlb-next-refresh-label");
-    if (nrEl && arCdEl) {
-      var cdRect = arCdEl.getBoundingClientRect();
-      if (cdRect.width) {
-        nrEl.style.top = Math.max(8, cdRect.top) + "px";
-        nrEl.style.left = "auto";
-        nrEl.style.right = Math.max(8, window.innerWidth - cdRect.left + 8) + "px";
-        nrEl.style.bottom = "auto";
       }
     }
     hideLastUpdated();
@@ -1990,18 +1972,15 @@
   function reflectAutoRefreshToggle() {
     var cb = document.getElementById("rlb-fleetyes-refresh-cb");
     if (cb && cb.checked !== arEnabled) cb.checked = arEnabled;
-    var show = arEnabled ? "inline-flex" : "none";
     var cd = document.getElementById("rlb-ar-countdown");
-    if (cd) cd.style.display = show;
-    var nr = document.getElementById("rlb-next-refresh-label");
-    if (nr) nr.style.display = show;
+    if (cd) cd.style.display = arEnabled ? "inline-flex" : "none";
   }
 
   function tickCountdown() {
     var cd = document.getElementById("rlb-ar-countdown");
     if (!cd) return;
     var remaining = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
-    cd.textContent = remaining + "s";
+    cd.textContent = "Next Refresh " + remaining + "s";
   }
   function startCountdown() {
     if (arCountdownTimer) return;
