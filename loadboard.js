@@ -71,18 +71,18 @@
       // child nodes into Relay's React-managed DOM (which crashes the app).
       "[data-rlb-match]{outline:2px solid #f59e0b!important;outline-offset:-2px;background:rgba(245,158,11,.06)!important;position:relative!important;}",
       "[data-rlb-match='strong']{outline-color:#16a34a!important;background:rgba(22,163,74,.08)!important;}",
-      "[data-rlb-badge]::after{content:attr(data-rlb-badge);position:absolute;top:6px;left:6px;z-index:5;background:#f59e0b;color:#fff;font:600 11px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:3px 6px;border-radius:5px;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,.25);}",
+      "[data-rlb-badge]::after{content:attr(data-rlb-badge);position:absolute;top:6px;left:6px;z-index:5;background:#f59e0b;color:#fff;font:600 11px/1 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;padding:3px 6px;border-radius:5px;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,.25);}",
       "[data-rlb-match='strong'][data-rlb-badge]::after{background:#16a34a;}",
       // EARLY badge for loads with a driver matched via the availability lead
       // (pickup before drop-off). Rendered via the card's ::before — NO DOM node is
       // inserted into Relay's React tree — and positioned in JS (positionEarlyBadge)
       // to sit on the status row, just right of the "Live" label (between Live and
       // the Amount). Position is scroll-invariant (::before is absolute in the card).
-      "[data-rlb-lead]::before{content:'EARLY';position:absolute;left:var(--rlb-early-left,8px);top:var(--rlb-early-top,8px);z-index:6;background:#b91c1c;color:#fff;font:700 10px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:4px 6px;border-radius:4px;letter-spacing:.04em;box-shadow:0 1px 2px rgba(0,0,0,.3);pointer-events:none;white-space:nowrap;}",
-      "#rlb-tip{position:fixed;z-index:2147483647;max-width:340px;background:#0f172a;color:#e2e8f0;font:12px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);pointer-events:none;display:none;}",
+      "[data-rlb-lead]::before{content:'EARLY';position:absolute;left:var(--rlb-early-left,8px);top:var(--rlb-early-top,8px);z-index:6;background:#b91c1c;color:#fff;font:700 10px/1 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;padding:4px 6px;border-radius:4px;letter-spacing:.04em;box-shadow:0 1px 2px rgba(0,0,0,.3);pointer-events:none;white-space:nowrap;}",
+      "#rlb-tip{position:fixed;z-index:2147483647;max-width:340px;background:#0f172a;color:#e2e8f0;font:12px/1.45 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);pointer-events:none;display:none;}",
       // Solid near-black tooltip: no borders, no header underline, full-brightness
       // white text on every row (no dimming/opacity). Keeps the tabular columns.
-      "#rlb-tip{position:fixed;z-index:2147483647;max-width:360px;background:#0b0f19;color:#ffffff;font:12px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:none;display:none;}",
+      "#rlb-tip{position:fixed;z-index:2147483647;max-width:360px;background:#0b0f19;color:#ffffff;font:12px/1.3 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:none;display:none;}",
       "#rlb-tip .h{font-weight:700;margin-bottom:4px;color:#fff;}",
       "#rlb-tip table{width:100%;border-collapse:collapse;}",
       "#rlb-tip td{padding:2px 6px 2px 0;white-space:nowrap;border:none;color:#ffffff;font-size:11px;}",
@@ -112,16 +112,23 @@
       "#rlb-launch-unassigned:disabled{cursor:default;}",
       "#rlb-launch-unassigned .bolt{font-size:16px;}",
       "#rlb-launch-unassigned.busy .bolt{animation:rlbpulse 1s ease-in-out infinite;}",
-      // "Only my driver locations" filter chip — a slider-style toggle + label.
-      "#rlb-only-mine,#rlb-only-mine *{box-sizing:border-box;}",
-      "#rlb-only-mine{position:fixed;top:72px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);cursor:pointer;user-select:none;}",
+      // Bottom-bar slider toggle chips — shared by "Only my driver locations"
+      // (#rlb-only-mine) and "Fleetyes refresh" (#rlb-fleetyes-refresh).
+      "#rlb-only-mine,#rlb-fleetyes-refresh,#rlb-only-mine *,#rlb-fleetyes-refresh *{box-sizing:border-box;}",
+      "#rlb-only-mine,#rlb-fleetyes-refresh{position:fixed;bottom:14px;right:22px;z-index:2147483002;display:inline-flex;align-items:center;gap:9px;height:34px;white-space:nowrap;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);cursor:pointer;user-select:none;}",
       // Toggle switch: the real checkbox is transparent on top; the slider draws the UI.
-      "#rlb-only-mine .rlb-switch{position:relative;display:inline-block;width:34px;height:18px;flex:none;}",
-      "#rlb-only-mine .rlb-switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;}",
-      "#rlb-only-mine .rlb-slider{position:absolute;inset:0;background:#cbd5e1;border-radius:999px;transition:background .15s ease;}",
-      "#rlb-only-mine .rlb-slider::before{content:\"\";position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s ease;}",
-      "#rlb-only-mine .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
-      "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
+      "#rlb-only-mine .rlb-switch,#rlb-fleetyes-refresh .rlb-switch{position:relative;display:inline-block;width:34px;height:18px;flex:none;}",
+      "#rlb-only-mine .rlb-switch input,#rlb-fleetyes-refresh .rlb-switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;}",
+      "#rlb-only-mine .rlb-slider,#rlb-fleetyes-refresh .rlb-slider{position:absolute;inset:0;background:#cbd5e1;border-radius:999px;transition:background .15s ease;}",
+      "#rlb-only-mine .rlb-slider::before,#rlb-fleetyes-refresh .rlb-slider::before{content:\"\";position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s ease;}",
+      "#rlb-only-mine .rlb-switch input:checked + .rlb-slider,#rlb-fleetyes-refresh .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
+      "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before,#rlb-fleetyes-refresh .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
+      // Auto-refresh countdown chip — sits beside the Refresh toggle and shows
+      // the remaining seconds until the next automatic board refresh.
+      "#rlb-ar-countdown{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;justify-content:center;white-space:nowrap;min-width:160px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:600 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:rgb(0,104,141);box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
+      // "Next Refresh" label — sits to the LEFT of the countdown while the Refresh
+      // toggle is on, so the row reads: Only my drivers | Next Refresh | 7s | Refresh.
+      "#rlb-next-refresh-label{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
       // Hide non-matching load cards when the filter is on (data-attr = React-safe,
       // same approach as the highlight outline — we never touch Relay's child nodes).
       "[data-rlb-hidden]{display:none!important;}",
@@ -132,7 +139,7 @@
       "html[data-rlb-filter] [data-rlb-badge]::after{display:none!important;}",
       // Progress / result card.
       "#rlb-card,#rlb-card *{box-sizing:border-box;}",
-      "#rlb-card{position:fixed;top:122px;right:22px;width:340px;max-width:92vw;z-index:2147483000;background:#fff;border:1px solid #e5e9f0;border-radius:14px;box-shadow:0 14px 44px rgba(15,23,42,.24);font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;overflow:hidden;display:none;}",
+      "#rlb-card{position:fixed;top:122px;right:22px;width:340px;max-width:92vw;z-index:2147483000;background:#fff;border:1px solid #e5e9f0;border-radius:14px;box-shadow:0 14px 44px rgba(15,23,42,.24);font:13px/1.5 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;overflow:hidden;display:none;}",
       "#rlb-card.show{display:block;}",
       "#rlb-card .head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;background:#0f172a;color:#fff;}",
       "#rlb-card .head b{font-size:14px;}",
@@ -172,7 +179,7 @@
       // Drivers overlay restyled to match the dark hover tooltip (#rlb-tip):
       // near-black bg, full-white text, subtle dark separators, and warn rows
       // using the same red wash as the tooltip's lead rows.
-      "#rlb-drivers{position:fixed;top:60px;left:16px;z-index:2147483200;background:#0b0f19;border:1px solid #1f2937;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.5);font:12px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;color:#fff;width:560px;max-width:92vw;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;}",
+      "#rlb-drivers{position:fixed;top:60px;left:16px;z-index:2147483200;background:#0b0f19;border:1px solid #1f2937;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.5);font:12px/1.4 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;color:#fff;width:560px;max-width:92vw;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;}",
       "#rlb-drivers .t{background:#0b0f19;color:#fff;font-weight:700;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;cursor:move;border-bottom:1px solid #1f2937;}",
       "#rlb-drivers .t button{background:transparent;color:#cbd5e1;border:none;font-size:16px;cursor:pointer;line-height:1;}",
       "#rlb-drivers .body{overflow:auto;padding:0;}",
@@ -250,6 +257,28 @@
       schedulePaint();
     });
 
+    // "Refresh" toggle = the on-page Auto Refresh switch. Its checked state mirrors
+    // arEnabled (set by reflectAutoRefreshToggle); clicking it writes arEnabled to
+    // storage, which the storage.onChanged listener turns into start/stop. Placed
+    // by positionOnlyMine; the countdown chip sits beside it.
+    var fy = document.createElement("label");
+    fy.id = "rlb-fleetyes-refresh";
+    fy.title = "Auto refresh — refresh the board on a randomized timer";
+    fy.innerHTML = '<span class="rlb-switch"><input id="rlb-fleetyes-refresh-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Auto Refresh</span>';
+    document.body.appendChild(fy);
+    var fyCb = fy.querySelector("#rlb-fleetyes-refresh-cb");
+    fyCb.checked = arEnabled;
+    fyCb.addEventListener("change", function () {
+      try { chrome.storage.local.set({ arEnabled: !!fyCb.checked }); } catch (e) { /* context invalidated */ }
+    });
+
+    // Countdown chip: remaining seconds until the next auto-refresh, shown beside
+    // the Refresh toggle. Text + visibility driven by the auto-refresh tick logic.
+    var arCd = document.createElement("span");
+    arCd.id = "rlb-ar-countdown";
+    arCd.title = "Time until the next automatic refresh";
+    document.body.appendChild(arCd);
+
     var card = document.createElement("div");
     card.id = "rlb-card";
     card.innerHTML =
@@ -265,6 +294,13 @@
     positionLauncher();
     window.addEventListener("scroll", positionLauncher, true);
     window.addEventListener("resize", positionLauncher);
+
+    // The "Only my driver locations" toggle is a fixed control next to the refresh
+    // button at the bottom; the footer is viewport-fixed, so track resize (not
+    // scroll). Retry once shortly after load — the utility bar renders after us.
+    positionOnlyMine();
+    window.addEventListener("resize", positionOnlyMine);
+    window.setTimeout(positionOnlyMine, 1200);
   }
 
   // Anchor the floating launcher to the search panel's top-right so it reads as
@@ -289,37 +325,157 @@
       bf.style.top = b.style.top;
       bf.style.right = Math.max(12, window.innerWidth - br.left + 10) + "px";
     }
-    // The filter chip sits INLINE on the search panel's fields row, in the empty gap
-    // to the right of the "Search loads" button (before "Saved searches"), vertically
-    // centred on the inputs. We can't inject into the React panel, so we overlay a
-    // fixed element aligned to the fields' boxes. Fall back to below-Origin, then to
-    // the panel's bottom-left, if those anchors aren't found.
-    var only = document.getElementById("rlb-only-mine");
-    if (only) {
-      only.style.right = "auto";
-      var originEl = document.getElementById("rlb-origin-city-filter");
-      var oref = originEl && originEl.getBoundingClientRect();
-      // "Search loads" has no stable id — find it by its label text within the panel.
-      var searchBtn = null, panelEl = anchor.closest ? (anchor.closest(".search__panel") || anchor) : anchor;
-      var btns = (panelEl || document).querySelectorAll("button");
-      for (var bi = 0; bi < btns.length; bi++) {
-        if ((btns[bi].textContent || "").trim().toLowerCase() === "search loads") { searchBtn = btns[bi]; break; }
-      }
-      var sref = searchBtn && searchBtn.getBoundingClientRect();
-      var eqEl = document.getElementById("equipment-trailer-filter");
-      var eref = eqEl && eqEl.getBoundingClientRect();
-      var anchorRight = (sref && sref.width) ? sref.right : ((eref && eref.width) ? eref.right : null);
-      if (anchorRight != null && oref && oref.width) {
-        only.style.left = (anchorRight + 16) + "px";
-        only.style.top = (oref.top + (oref.height - only.offsetHeight) / 2) + "px";
-      } else if (oref && oref.width) {
-        only.style.left = Math.max(8, oref.left) + "px";
-        only.style.top = (oref.bottom + 8) + "px";
-      } else {
-        only.style.left = Math.max(8, r.left + 12) + "px";
-        only.style.top = Math.max(8, r.bottom - only.offsetHeight - 12) + "px";
+    // NOTE: the "Only my driver locations" toggle used to be overlaid inline on
+    // this search panel; it now lives as a fixed control next to the refresh
+    // button at the bottom of the page — see positionOnlyMine below.
+  }
+
+  // Pin the "Only my driver locations" toggle as a fixed control next to Relay's
+  // manual refresh button at the bottom of the page (inside .refresh-and-chat-box
+  // / #utility-bar). That footer is viewport-fixed, so — unlike the launcher,
+  // which tracks the scrolling search panel — this only runs on load + resize
+  // (no scroll jitter). Falls back to the CSS bottom-right default until the
+  // refresh control is present.
+  // Find Relay's "Last updated …" timestamp in the footer utility bar — the
+  // tightest element whose text contains "last updated". Returns null if absent.
+  function findLastUpdatedEl() {
+    var bar = document.getElementById("utility-bar") || document;
+    var nodes = bar.querySelectorAll("*");
+    var best = null;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var t = (n.textContent || "").trim();
+      if (t && /last updated/i.test(t)) {
+        if (!best || n.querySelectorAll("*").length < best.querySelectorAll("*").length) best = n;
       }
     }
+    return best;
+  }
+
+  // Hide Relay's native "Last updated …" label + its countdown timer — the user's
+  // "Refresh" chip takes that slot. Climb from the "last updated" text to the
+  // tightest container that also holds the timer, stopping before a parent that
+  // would swallow the auto-refresh toggle / chat button; also hide a right-side
+  // timer sibling in a flat layout. Re-applied on repaint because Relay re-renders
+  // the timer each second.
+  function hideLastUpdated() {
+    var el = findLastUpdatedEl();
+    if (!el) return;
+    var node = el;
+    while (node.parentElement) {
+      var p = node.parentElement;
+      var pt = (p.textContent || "").toLowerCase();
+      if (/auto[\s-]?refresh|chat|message|help|reload/.test(pt)) break;
+      if (p.querySelectorAll("*").length > 6) break;
+      node = p;
+    }
+    if (node.style.display !== "none") node.style.display = "none";
+    var sib = node.nextElementSibling;
+    while (sib) {
+      var st = (sib.textContent || "").trim();
+      if (st && /^\d/.test(st) && st.length <= 8) {
+        if (sib.style.display !== "none") sib.style.display = "none";
+        sib = sib.nextElementSibling;
+      } else break;
+    }
+  }
+
+  // Hide Relay's native "Turn on auto-refresh" toggle + its label — the user's
+  // "Refresh" chip replaces that whole area. The switch stays in the DOM
+  // (display:none) so ensureAutoRefreshOff can still click it off; we hide it
+  // and the "…auto-refresh" label leaf.
+  function hideAutoRefreshToggle() {
+    var box = document.querySelector(".refresh-and-chat-box");
+    if (!box) return;
+    // The visible toggle is a painted slider that shares a wrapper with the
+    // accessible switch — so hide the WRAPPER (climb from the switch to the box's
+    // direct child), not just the switch input (which is often invisible on its
+    // own). Relay's role isn't always literally "switch", so match a few shapes.
+    var sw = box.querySelector('[role="switch"], [role="checkbox"], button[aria-checked="true"], button[aria-checked="false"]');
+    if (sw) {
+      var refreshBtn = findRelayRefreshControl();
+      var sLab = (sw.getAttribute && (sw.getAttribute("aria-label") || sw.getAttribute("title"))) || (sw.textContent || "");
+      // Never treat the refresh button or chat button as the toggle.
+      if (sw !== refreshBtn && !/chat|message|help|support|reload/i.test(sLab)) {
+        var node = sw;
+        while (node && node.parentElement && node.parentElement !== box) node = node.parentElement;
+        if (node && node !== box && node.style.display !== "none") node.style.display = "none";
+      }
+    }
+    // Hide the "…auto-refresh" label leaf(s) — sometimes outside the wrapper.
+    var nodes = box.querySelectorAll("*");
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (n.children.length !== 0) continue;
+      var lt = (n.textContent || "").trim().toLowerCase();
+      if (lt && /auto[\s-]?refresh/.test(lt) && n.style.display !== "none") n.style.display = "none";
+    }
+  }
+
+  function positionOnlyMine() {
+    var only = document.getElementById("rlb-only-mine");
+    if (!only) return;
+    var fy = document.getElementById("rlb-fleetyes-refresh");
+    var arCdEl = document.getElementById("rlb-ar-countdown");
+
+    // Bottom row, left → right: Only my drivers | Refresh | "Next Refresh 7s" | refresh icon.
+    // Position right → left so each chip anchors to the one on its right.
+    var iconBtn = findRelayRefreshControl();
+    var ir = iconBtn && iconBtn.getBoundingClientRect();
+    var box2 = document.querySelector(".refresh-and-chat-box");
+    var fr = box2 && box2.getBoundingClientRect();
+
+    // SHIFT pulls the whole chip group this many px further LEFT of the refresh icon.
+    // We anchor to a copy of the icon rect shifted SHIFT px right, so every chip
+    // (directly or indirectly) anchored to it moves SHIFT px left — inter-chip gaps unchanged.
+    var SHIFT = 16;
+    var irS = ir ? { top: ir.top, height: ir.height, width: ir.width, bottom: ir.bottom, left: ir.left - SHIFT, right: ir.right - SHIFT } : null;
+
+    // Place `el` immediately LEFT of `anchorRect` on the same baseline; gap is the
+    // px between el's right edge and the anchor's left edge. Returns true if placed.
+    function placeLeft(el, anchorRect, gap) {
+      if (!el || !anchorRect || !anchorRect.width) return false;
+      var h = el.offsetHeight || 34;
+      el.style.top = Math.max(8, anchorRect.top + (anchorRect.height - h) / 2) + "px";
+      el.style.left = "auto";
+      el.style.right = Math.max(8, window.innerWidth - anchorRect.left + (gap || 8)) + "px";
+      el.style.bottom = "auto";
+      return true;
+    }
+    function clearEl(el) {
+      if (!el) return;
+      el.style.top = "auto"; el.style.left = "auto";
+      el.style.right = ""; el.style.bottom = "";
+    }
+
+    var haveIcon = ir && ir.width && ir.bottom > 0 && ir.top < window.innerHeight;
+    var haveCluster = fr && fr.width && fr.bottom > 0 && fr.top < window.innerHeight;
+
+    if (haveIcon) {
+      // Countdown left of the (shifted) icon — positioned even while hidden, so ready.
+      placeLeft(arCdEl, irS, 8);
+      // Always reserve the countdown's slot (its stable width, even while hidden)
+      // so the toggle never overlaps it. offsetWidth is 0 while display:none → fall
+      // back to the CSS min-width (160), which matches the visible width.
+      var cdW = (arCdEl && arCdEl.offsetWidth) || 160;
+      var cdSlot = { top: irS.top, height: irS.height, width: cdW, bottom: irS.bottom, left: irS.left - 8 - cdW, right: irS.left - 8 };
+      var placedFy = placeLeft(fy, cdSlot, 8);
+      // "Only my drivers" left of the Refresh toggle (or the icon if no toggle).
+      placeLeft(only, (placedFy && fy) ? fy.getBoundingClientRect() : irS, 10);
+    } else if (haveCluster && fy) {
+      // No icon yet — stack the toggle left of the cluster's right edge.
+      fy.style.top = Math.max(8, fr.top + (fr.height - (fy.offsetHeight || 34)) / 2) + "px";
+      fy.style.left = "auto";
+      fy.style.right = Math.max(8, window.innerWidth - fr.right + SHIFT) + "px";
+      fy.style.bottom = "auto";
+      placeLeft(only, fy.getBoundingClientRect(), 10);
+      clearEl(arCdEl);
+    } else {
+      // Nothing to anchor to — fall back to the CSS bottom-right defaults.
+      clearEl(only); clearEl(fy); clearEl(arCdEl);
+    }
+    hideLastUpdated();
+    hideAutoRefreshToggle();
   }
 
   function showCard() {
@@ -1651,6 +1807,8 @@
     ensurePanel();
     positionLauncher();
     ensureAutoRefreshOff();
+    hideLastUpdated();
+    hideAutoRefreshToggle();
     var rows = loadRows();
     setPanel("rlb-rows", String(rows.length));
     clearPaint();
@@ -1786,6 +1944,11 @@
 
   var arRand = function (lo, hi) { return lo + Math.random() * (hi - lo); };
 
+  // Countdown-to-next-refresh state. nextRefreshAt is set each cycle in
+  // scheduleNextRefresh; a 1s interval (arCountdownTimer) ticks the chip text.
+  var nextRefreshAt = 0;
+  var arCountdownTimer = null;
+
   function clearAutoRefreshTimer() {
     if (arTimer) { clearTimeout(arTimer); arTimer = null; }
     if (arRescoreTimer) { clearTimeout(arRescoreTimer); arRescoreTimer = null; }
@@ -1794,11 +1957,43 @@
   // Min ≤ Max is required; refuse to run while the range is invalid.
   function autoRefreshRangeValid() { return arMin <= arMax; }
 
+  // Mirror arEnabled into the Refresh toggle checkbox + countdown visibility.
+  function reflectAutoRefreshToggle() {
+    var cb = document.getElementById("rlb-fleetyes-refresh-cb");
+    if (cb && cb.checked !== arEnabled) cb.checked = arEnabled;
+    var cd = document.getElementById("rlb-ar-countdown");
+    if (cd) cd.style.display = arEnabled ? "inline-flex" : "none";
+  }
+
+  function tickCountdown() {
+    var cd = document.getElementById("rlb-ar-countdown");
+    if (!cd) return;
+    var remaining = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
+    cd.textContent = "Next Refresh In " + remaining + "s";
+    // Re-layout the bottom chip row each tick. The countdown can change width as
+    // the seconds tick (1- vs 2-digit) and re-appear after an OFF→ON toggle, which
+    // could otherwise let it paint over the Auto Refresh toggle. Repositioning here
+    // keeps the toggle → countdown → icon chain aligned at all times.
+    positionOnlyMine();
+  }
+  function startCountdown() {
+    if (arCountdownTimer) return;
+    tickCountdown();
+    arCountdownTimer = setInterval(tickCountdown, 1000);
+  }
+  function stopCountdown() {
+    if (arCountdownTimer) { clearInterval(arCountdownTimer); arCountdownTimer = null; }
+    var cd = document.getElementById("rlb-ar-countdown");
+    if (cd) cd.textContent = "";
+  }
+
   // Schedule the next refresh at a random point in [arMin, arMax] seconds.
   function scheduleNextRefresh() {
     if (!arEnabled) return;
     var lo = Math.min(arMin, arMax), hi = Math.max(arMin, arMax);
     var waitMs = Math.round(arRand(lo, hi) * 1000);
+    nextRefreshAt = Date.now() + waitMs;
+    startCountdown();
     arTimer = setTimeout(function () {
       arTimer = null;
       doAutoRefresh();
@@ -1814,6 +2009,7 @@
 
   function stopAutoRefresh() {
     clearAutoRefreshTimer();
+    stopCountdown();
   }
 
   // Apply auto-refresh config (from storage): clamp, validate, and (re)start/stop.
@@ -1821,7 +2017,9 @@
     if (typeof r.arMin === "number") arMin = Math.min(Math.max(r.arMin, AR_MIN_S), AR_MAX_S);
     if (typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
     arEnabled = !!r.arEnabled && autoRefreshRangeValid();
+    reflectAutoRefreshToggle();
     if (arEnabled) startAutoRefresh(); else stopAutoRefresh();
+    positionOnlyMine(); // reposition AFTER the countdown has its text (stable width)
   }
 
   // Read the popup-managed config from storage on boot, then start if enabled.
