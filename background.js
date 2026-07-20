@@ -20,7 +20,7 @@ const DEFAULTS = {
   relayBase: "https://relay.amazon.co.uk",
   // Bare host base. Each endpoint appends its own path: shifts → /api/v1/…,
   // rlb-settings → /v1/… (see activeDriverShiftsUrl / rlbSettingsUrl).
-  ontrackUrl: "https://ontrack-api.agilecyber.com/",
+  ontrackUrl: "https://ontrack-api.agilecyber.com",
   ingestUrl: "",
   token: "",
   carrierCode: "", // e.g. "AMRTL" — used for the FleetYes approved-places lookup
