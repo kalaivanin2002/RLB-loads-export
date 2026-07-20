@@ -165,7 +165,7 @@
       "#rlb-card .result .lbl{color:#64748b;margin-top:5px;}",
       "#rlb-card .result .rnd{color:#94a3b8;font-size:12px;margin-top:2px;}",
       "#rlb-card .actions{display:flex;flex-direction:column;gap:8px;margin-top:15px;}",
-      "#rlb-card .actions button{width:100%;border:none;border-radius:9px;padding:11px 12px;font:700 13px/1 inherit;cursor:pointer;}",
+      "#rlb-card .actions button{width:100%;border:none;border-radius:9px;padding:11px 12px;font:700 13px/1 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;}",
       "#rlb-card .actions .primary{background:#2563eb;color:#fff;}",
       "#rlb-card .actions .ghost{background:#f1f5f9;color:#334155;}",
       "#rlb-card .actions button:disabled{opacity:.5;cursor:default;}",
@@ -176,7 +176,7 @@
       "#rlb-card .adv summary{cursor:pointer;color:#94a3b8;font-size:12px;list-style:none;outline:none;}",
       "#rlb-card .adv summary::-webkit-details-marker{display:none;}",
       "#rlb-card .adv .tools{display:flex;flex-direction:column;gap:6px;margin-top:8px;}",
-      "#rlb-card .adv .tools button{width:100%;background:#f1f5f9;color:#334155;border:none;border-radius:8px;padding:9px;font:600 12px/1 inherit;cursor:pointer;}",
+      "#rlb-card .adv .tools button{width:100%;background:#f1f5f9;color:#334155;border:none;border-radius:8px;padding:9px;font:600 12px/1 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;}",
       // Flash outline used when stepping through matched loads (data-attr = React-safe).
       // Matches the launcher button's teal so it reads as "this extension" feedback.
       "[data-rlb-flash]{outline:3px solid rgb(0,104,141)!important;outline-offset:-3px;}",
