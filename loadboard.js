@@ -79,18 +79,21 @@
       // to sit on the status row, just right of the "Live" label (between Live and
       // the Amount). Position is scroll-invariant (::before is absolute in the card).
       "[data-rlb-lead]::before{content:'EARLY';position:absolute;left:var(--rlb-early-left,8px);top:var(--rlb-early-top,8px);z-index:6;background:#b91c1c;color:#fff;font:700 10px/1 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;padding:4px 6px;border-radius:4px;letter-spacing:.04em;box-shadow:0 1px 2px rgba(0,0,0,.3);pointer-events:none;white-space:nowrap;}",
-      "#rlb-tip{position:fixed;z-index:2147483647;max-width:340px;background:#0f172a;color:#e2e8f0;font:12px/1.45 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.4);pointer-events:none;display:none;}",
       // Solid near-black tooltip: no borders, no header underline, full-brightness
       // white text on every row (no dimming/opacity). Keeps the tabular columns.
       "#rlb-tip{position:fixed;z-index:2147483647;max-width:360px;background:#0b0f19;color:#ffffff;font:12px/1.3 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:none;display:none;}",
       "#rlb-tip .h{font-weight:700;margin-bottom:4px;color:#fff;}",
-      "#rlb-tip table{width:100%;border-collapse:collapse;}",
-      "#rlb-tip td{padding:2px 6px 2px 0;white-space:nowrap;border:none;color:#ffffff;font-size:11px;}",
+      // !important on the border/background resets: Relay's own page styles can leak
+      // into our injected table (default cell borders, alternating-row backgrounds)
+      // if their stylesheet loads/wins after ours — these overrides keep the tooltip
+      // a flat borderless dark panel regardless of load order.
+      "#rlb-tip table{width:100%;border-collapse:collapse;border:none!important;box-shadow:none!important;background:transparent!important;}",
+      "#rlb-tip td{padding:2px 6px 2px 0;white-space:nowrap;border:none!important;background:transparent!important;color:#ffffff;font-size:11px;}",
       // Driver name truncates (single line + ellipsis) so a long name keeps the row a
       // uniform height and the tooltip narrow; full name still shows on hover.
       "#rlb-tip .rlb-dname{display:inline-block;max-width:108px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;}",
       "#rlb-tip td:not(:first-child){text-align:right;}",
-      "#rlb-tip th{padding:0 6px 3px 0;white-space:nowrap;text-align:left;color:#ffffff;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none;}",
+      "#rlb-tip th{padding:0 6px 3px 0;white-space:nowrap;text-align:left;color:#ffffff;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.02em;border:none!important;background:transparent!important;}",
       "#rlb-tip th:not(:first-child){text-align:right;}",
       "#rlb-tip tr.b td{color:#4ade80;}",
       // Drivers whose match relies on the availability lead (pickup before drop-off)
