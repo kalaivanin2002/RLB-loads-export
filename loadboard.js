@@ -127,8 +127,13 @@
       "#rlb-only-mine .rlb-switch input:checked + .rlb-slider,#rlb-fleetyes-refresh .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
       "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before,#rlb-fleetyes-refresh .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
       // Auto-refresh countdown chip — sits beside the Refresh toggle and shows
-      // the remaining seconds until the next automatic board refresh.
-      "#rlb-ar-countdown{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;justify-content:center;white-space:nowrap;min-width:160px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:600 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:rgb(0,104,141);box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
+      // the remaining seconds until the next automatic board refresh. box-sizing:
+      // border-box keeps its rendered width equal to min-width (160px) so the
+      // reserved-slot fallback in positionOnlyMine (which assumes 160px while the
+      // chip is display:none and offsetWidth reads 0) actually matches — without
+      // it, padding/border pushed the real width to 182px and the chip landed
+      // partly underneath the Auto Refresh toggle when switched on.
+      "#rlb-ar-countdown{box-sizing:border-box;position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;justify-content:center;white-space:nowrap;min-width:160px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:600 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:rgb(0,104,141);box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
       // "Next Refresh" label — sits to the LEFT of the countdown while the Refresh
       // toggle is on, so the row reads: Only my drivers | Next Refresh | 7s | Refresh.
       "#rlb-next-refresh-label{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
@@ -163,7 +168,7 @@
       "#rlb-card .result .lbl{color:#64748b;margin-top:5px;}",
       "#rlb-card .result .rnd{color:#94a3b8;font-size:12px;margin-top:2px;}",
       "#rlb-card .actions{display:flex;flex-direction:column;gap:8px;margin-top:15px;}",
-      "#rlb-card .actions button{width:100%;border:none;border-radius:9px;padding:11px 12px;font:700 13px/1 inherit;cursor:pointer;}",
+      "#rlb-card .actions button{width:100%;border:none;border-radius:9px;padding:11px 12px;font:700 13px/1 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;}",
       "#rlb-card .actions .primary{background:#2563eb;color:#fff;}",
       "#rlb-card .actions .ghost{background:#f1f5f9;color:#334155;}",
       "#rlb-card .actions button:disabled{opacity:.5;cursor:default;}",
@@ -174,7 +179,7 @@
       "#rlb-card .adv summary{cursor:pointer;color:#94a3b8;font-size:12px;list-style:none;outline:none;}",
       "#rlb-card .adv summary::-webkit-details-marker{display:none;}",
       "#rlb-card .adv .tools{display:flex;flex-direction:column;gap:6px;margin-top:8px;}",
-      "#rlb-card .adv .tools button{width:100%;background:#f1f5f9;color:#334155;border:none;border-radius:8px;padding:9px;font:600 12px/1 inherit;cursor:pointer;}",
+      "#rlb-card .adv .tools button{width:100%;background:#f1f5f9;color:#334155;border:none;border-radius:8px;padding:9px;font:600 12px/1 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;}",
       // Flash outline used when stepping through matched loads (data-attr = React-safe).
       // Matches the launcher button's teal so it reads as "this extension" feedback.
       "[data-rlb-flash]{outline:3px solid rgb(0,104,141)!important;outline-offset:-3px;}",
@@ -445,11 +450,6 @@
       el.style.bottom = "auto";
       return true;
     }
-    function clearEl(el) {
-      if (!el) return;
-      el.style.top = "auto"; el.style.left = "auto";
-      el.style.right = ""; el.style.bottom = "";
-    }
 
     var haveIcon = ir && ir.width && ir.bottom > 0 && ir.top < window.innerHeight;
     var haveCluster = fr && fr.width && fr.bottom > 0 && fr.top < window.innerHeight;
@@ -459,23 +459,38 @@
       placeLeft(arCdEl, irS, 8);
       // Always reserve the countdown's slot (its stable width, even while hidden)
       // so the toggle never overlaps it. offsetWidth is 0 while display:none → fall
-      // back to the CSS min-width (160), which matches the visible width.
-      var cdW = (arCdEl && arCdEl.offsetWidth) || 160;
+      // back to the CSS min-width (160), which matches the visible width. A few
+      // extra px of margin absorb any small font/rounding variance so the toggle
+      // group never crowds the timer's left edge.
+      var cdW = ((arCdEl && arCdEl.offsetWidth) || 160) + 6;
       var cdSlot = { top: irS.top, height: irS.height, width: cdW, bottom: irS.bottom, left: irS.left - 8 - cdW, right: irS.left - 8 };
       var placedFy = placeLeft(fy, cdSlot, 8);
       // "Only my drivers" left of the Refresh toggle (or the icon if no toggle).
       placeLeft(only, (placedFy && fy) ? fy.getBoundingClientRect() : irS, 10);
     } else if (haveCluster && fy) {
-      // No icon yet — stack the toggle left of the cluster's right edge.
-      fy.style.top = Math.max(8, fr.top + (fr.height - (fy.offsetHeight || 34)) / 2) + "px";
-      fy.style.left = "auto";
-      fy.style.right = Math.max(8, window.innerWidth - fr.right + SHIFT) + "px";
-      fy.style.bottom = "auto";
-      placeLeft(only, fy.getBoundingClientRect(), 10);
-      clearEl(arCdEl);
+      // No icon yet — anchor to the cluster's right edge (shifted, same idea as
+      // the icon case) so the countdown still reserves its slot here too, instead
+      // of overlapping fy at their shared CSS default position.
+      var frS = { top: fr.top, height: fr.height, width: fr.width, bottom: fr.bottom, left: fr.right - SHIFT, right: fr.right - SHIFT };
+      placeLeft(arCdEl, frS, 8);
+      var cdWCluster = ((arCdEl && arCdEl.offsetWidth) || 160) + 6;
+      var cdSlotCluster = { top: frS.top, height: frS.height, width: cdWCluster, bottom: frS.bottom, left: frS.left - 8 - cdWCluster, right: frS.left - 8 };
+      var placedFyCluster = placeLeft(fy, cdSlotCluster, 8);
+      placeLeft(only, (placedFyCluster && fy) ? fy.getBoundingClientRect() : frS, 10);
     } else {
-      // Nothing to anchor to — fall back to the CSS bottom-right defaults.
-      clearEl(only); clearEl(fy); clearEl(arCdEl);
+      // Nothing to anchor to — Relay's refresh icon AND .refresh-and-chat-box are
+      // both gone (e.g. it's removed from the DOM while "Find my best loads" runs).
+      // only/fy/arCdEl all share the same CSS bottom-right default (bottom:14px;
+      // right:22px), so clearing their inline styles used to stack all three
+      // directly on top of each other — the countdown chip (lower z-index) landed
+      // hidden behind the Auto Refresh toggle. Anchor to a synthetic corner rect
+      // instead and lay them out left→right the same way the haveIcon branch does.
+      var corner = { top: window.innerHeight - 14 - 34, height: 34, width: 1, bottom: window.innerHeight - 14, left: window.innerWidth - 22, right: window.innerWidth - 22 };
+      placeLeft(arCdEl, corner, 8);
+      var cdWFallback = ((arCdEl && arCdEl.offsetWidth) || 160) + 6;
+      var cdSlotFallback = { top: corner.top, height: corner.height, width: cdWFallback, bottom: corner.bottom, left: corner.left - 8 - cdWFallback, right: corner.left - 8 };
+      var placedFyFallback = placeLeft(fy, cdSlotFallback, 8);
+      placeLeft(only, (placedFyFallback && fy) ? fy.getBoundingClientRect() : corner, 10);
     }
     hideLastUpdated();
     hideAutoRefreshToggle();
