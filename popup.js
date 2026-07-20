@@ -31,6 +31,8 @@
   // touched here — saving the popup leaves them exactly as the last sync set them.
   const DEFAULTS = {
     relayBase: "https://relay.amazon.co.uk",
+    // ontrackUrl is no longer user-editable — kept as the built-in default so
+    // OnTrack API calls always have a base (see cfg.ontrackUrl in background.js).
     ontrackUrl: "https://ontrack-api.agilecyber.com",
     // carrierCode is no longer stored here — it's read live from the Relay page
     // (#case-carrier-scac) by the content script.
@@ -42,10 +44,7 @@
 
   const $ = (id) => document.getElementById(id);
   const els = {
-    toggleDev: $("toggleDev"),
-    devSettings: $("devSettings"),
     searchLocation: $("searchLocation"),
-    ontrackUrl: $("ontrackUrl"),
     saveDev: $("saveDev"),
   };
 
@@ -53,14 +52,8 @@
     chrome.storage.local.get(Object.keys(DEFAULTS), (r) => {
       const cfg = Object.assign({}, DEFAULTS, r || {});
       els.searchLocation.value = cfg.searchLocation || "";
-      els.ontrackUrl.value = cfg.ontrackUrl;
     });
   }
-
-  els.toggleDev.addEventListener("click", () => {
-    const open = els.devSettings.classList.toggle("hidden") === false;
-    els.toggleDev.textContent = open ? "Developer settings ▴" : "Developer settings ▾";
-  });
 
   function flashSaved() {
     const b = els.saveDev;
@@ -70,16 +63,25 @@
     setTimeout(() => { b.textContent = orig; }, 1200);
   }
 
+  function flashRequired() {
+    els.searchLocation.classList.add("invalid");
+    els.searchLocation.focus();
+    els.searchLocation.addEventListener("input", () => els.searchLocation.classList.remove("invalid"), { once: true });
+  }
+
   // Persist ONLY the connection keys, so a save can never clobber the
   // server-synced planning/scoring settings (or the auto-fetched token)
   // sitting alongside them in storage.
   function saveSettings() {
+    const searchLocation = els.searchLocation.value.trim();
+    if (!searchLocation) { flashRequired(); return; }
     const cfg = {
-      searchLocation: els.searchLocation.value.trim(),
-      // relayBase is no longer user-editable — kept as the built-in default so the
-      // Relay API calls always have a base (see cfg.relayBase in background.js).
+      searchLocation: searchLocation,
+      // relayBase / ontrackUrl are no longer user-editable — kept as the
+      // built-in defaults so API calls always have a base (see cfg.relayBase /
+      // cfg.ontrackUrl in background.js).
       relayBase: DEFAULTS.relayBase,
-      ontrackUrl: els.ontrackUrl.value.trim() || DEFAULTS.ontrackUrl,
+      ontrackUrl: DEFAULTS.ontrackUrl,
     };
     chrome.storage.local.set(cfg, flashSaved);
   }
