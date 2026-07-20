@@ -11,37 +11,18 @@
       <h1 class="title">RLB</h1>
     </div>
 
-    <!-- Planning rules and scoring now live in FleetYes → Settings → RLB Settings.
-         They are synced to this extension automatically for your carrier. Only
-         the connection setup below is edited here. -->
     <p class="field-hint" style="margin: 0 0 4px;">
-      Planning rules, auto-refresh and scoring weights are configured in
+      Planning rules and auto-refresh are configured in
       <strong>FleetYes → Settings → RLB Settings</strong> and synced here
       automatically for your carrier.
     </p>
 
-    <!-- Developer setup: connection only. URLs, token, carrier. Set once. -->
-    <button id="toggleDev" class="disclosure" type="button">Developer settings ▾</button>
-    <div id="devSettings" class="settings hidden">
-      <div class="settings-title">Search</div>
-      <label class="field">
-        <span>Search location</span>
-        <input id="searchLocation" type="text" placeholder="e.g. Darlington, UK" />
-        <small class="field-hint">The city all drivers' loads are searched from. Entered here only — it is not synced from FleetYes. Required, or searches won't run.</small>
-      </label>
-      <div class="settings-title">Developer · connection</div>
-      <label class="field">
-        <span>Locations API URL (FleetYes/OnTrack)</span>
-        <input id="ontrackUrl" type="text" placeholder="https://ontrack-api.agilecyber.com" />
-        <small class="field-hint">FleetYes/OnTrack base — also used to derive the approved-places and RLB settings endpoints.</small>
-      </label>
-      <p class="field-hint" style="margin: 4px 0 0;">
-        The Bearer token is issued automatically for your carrier (via
-        <code>/api/v1/init</code>) and cached in this browser — no need to
-        enter it manually.
-      </p>
-      <button id="saveDev" class="btn-secondary" type="button">Save settings</button>
-    </div>
+    <label class="field">
+      <span>Search location</span>
+      <input id="searchLocation" type="text" placeholder="e.g. Darlington, UK" />
+      <small class="field-hint">Enter the city or town you want to search for loads near. This is required before you can run a search.</small>
+    </label>
+    <button id="saveDev" class="btn-secondary" type="button">Save</button>
   </div>
 
   <script src="popup.js"></script>
