@@ -115,7 +115,7 @@
       // Bottom-bar slider toggle chips — shared by "Only my driver locations"
       // (#rlb-only-mine) and "Fleetyes refresh" (#rlb-fleetyes-refresh).
       "#rlb-only-mine,#rlb-fleetyes-refresh,#rlb-only-mine *,#rlb-fleetyes-refresh *{box-sizing:border-box;}",
-      "#rlb-only-mine,#rlb-fleetyes-refresh{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:inline-flex;align-items:center;gap:9px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);cursor:pointer;user-select:none;}",
+      "#rlb-only-mine,#rlb-fleetyes-refresh{position:fixed;bottom:14px;right:22px;z-index:2147483002;display:inline-flex;align-items:center;gap:9px;height:34px;white-space:nowrap;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 12px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);cursor:pointer;user-select:none;}",
       // Toggle switch: the real checkbox is transparent on top; the slider draws the UI.
       "#rlb-only-mine .rlb-switch,#rlb-fleetyes-refresh .rlb-switch{position:relative;display:inline-block;width:34px;height:18px;flex:none;}",
       "#rlb-only-mine .rlb-switch input,#rlb-fleetyes-refresh .rlb-switch input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;}",
@@ -1970,6 +1970,11 @@
     if (!cd) return;
     var remaining = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
     cd.textContent = "Next Refresh In " + remaining + "s";
+    // Re-layout the bottom chip row each tick. The countdown can change width as
+    // the seconds tick (1- vs 2-digit) and re-appear after an OFF→ON toggle, which
+    // could otherwise let it paint over the Auto Refresh toggle. Repositioning here
+    // keeps the toggle → countdown → icon chain aligned at all times.
+    positionOnlyMine();
   }
   function startCountdown() {
     if (arCountdownTimer) return;
