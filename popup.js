@@ -29,7 +29,7 @@
   // touched here — saving the popup leaves them exactly as the last sync set them.
   const DEFAULTS = {
     relayBase: "https://relay.amazon.co.uk",
-    ontrackUrl: "https://ontrack-api.agilecyber.com/",
+    ontrackUrl: "https://ontrack-api.agilecyber.com",
     token: "",
     // carrierCode is no longer stored here — it's read live from the Relay page
     // (#case-carrier-scac) by the content script.
