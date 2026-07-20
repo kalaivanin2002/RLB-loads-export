@@ -182,14 +182,18 @@
       // Drivers overlay restyled to match the dark hover tooltip (#rlb-tip):
       // near-black bg, full-white text, subtle dark separators, and warn rows
       // using the same red wash as the tooltip's lead rows.
-      "#rlb-drivers{position:fixed;top:60px;left:16px;z-index:2147483200;background:#0b0f19;border:1px solid #1f2937;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.5);font:12px/1.4 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;color:#fff;width:560px;max-width:92vw;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;}",
-      "#rlb-drivers .t{background:#0b0f19;color:#fff;font-weight:700;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;cursor:move;border-bottom:1px solid #1f2937;}",
+      "#rlb-drivers{position:fixed;top:60px;left:16px;z-index:2147483200;background:#0b0f19!important;border:1px solid #1f2937;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.5);font:12px/1.4 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;color:#fff;width:560px;max-width:92vw;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;}",
+      "#rlb-drivers .t{background:#0b0f19!important;color:#fff;font-weight:700;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;cursor:move;border-bottom:1px solid #1f2937;}",
       "#rlb-drivers .t button{background:transparent;color:#cbd5e1;border:none;font-size:16px;cursor:pointer;line-height:1;}",
-      "#rlb-drivers .body{overflow:auto;padding:0;}",
-      "#rlb-drivers table{width:100%;border-collapse:collapse;}",
-      "#rlb-drivers th,#rlb-drivers td{padding:6px 10px;text-align:left;border-bottom:1px solid #1f2937;white-space:nowrap;color:#fff;}",
-      "#rlb-drivers th{position:sticky;top:0;background:#0b0f19;font-weight:600;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.04em;z-index:1;}",
-      "#rlb-drivers tr.warn td{background:rgba(239,68,68,.16);color:#ff6b6b;}",
+      "#rlb-drivers .body{overflow:auto;padding:0;background:#0b0f19!important;}",
+      // !important on background/border: Relay's own page styles can leak into our
+      // injected table (default white cell backgrounds, grid borders) if their
+      // stylesheet loads/wins after ours — these overrides keep the panel a flat
+      // dark table regardless of load order (same fix as the #rlb-tip tooltip).
+      "#rlb-drivers table{width:100%;border-collapse:collapse;background:#0b0f19!important;}",
+      "#rlb-drivers th,#rlb-drivers td{padding:6px 10px;text-align:left;border:none!important;border-bottom:1px solid #1f2937!important;white-space:nowrap;color:#fff;background:#0b0f19!important;}",
+      "#rlb-drivers th{position:sticky;top:0;background:#0b0f19!important;font-weight:600;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.04em;z-index:1;}",
+      "#rlb-drivers tr.warn td{background:rgba(239,68,68,.16)!important;color:#ff6b6b;}",
       "#rlb-drivers .sub{color:#94a3b8;font-size:11px;}",
     ].join("");
     var st = document.createElement("style");
