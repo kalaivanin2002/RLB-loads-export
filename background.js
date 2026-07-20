@@ -42,12 +42,13 @@ const DEFAULTS = {
   gapBeforeNextHours: 2, // load must deliver this long before the next booked trip
   deadheadMph: 30, // effective speed over straight-line deadhead miles (road-time check)
   matchEquipment: true, // only recommend loads whose trailer matches the driver's
-  // Planner scoring weights (relative; need not sum to 1).
-  weightPayout: 0.4,
-  weightRate: 0.25,
-  weightDeadhead: 0.2,
-  weightTiming: 0.15,
-  weightReposition: 0.2, // favours loads that finish near where the driver started
+  // Planner scoring weights, as percentages (need not sum to exactly 100 —
+  // they're normalised by their sum in planLoadsForDriver either way).
+  weightPayout: 40,
+  weightRate: 25,
+  weightDeadhead: 20,
+  weightTiming: 15,
+  weightReposition: 20, // favours loads that finish near where the driver started
 };
 
 function getConfig() {
@@ -1428,6 +1429,10 @@ function activeDriverShiftsUrl(cfg) {
 function rlbSettingsUrl(cfg) {
   return ontrackOrigin(cfg) + "/v1/rlb-settings";
 }
+// init: {{base}}/api/v1/init?carrier=… — issues the Bearer token for a carrier.
+function initUrl(cfg) {
+  return ontrackOrigin(cfg) + "/api/v1/init";
+}
 
 // ── RLB settings sync ─────────────────────────────────────────────────────────
 // The FleetYes dashboard is the editor for the planning rules + developer
@@ -1455,17 +1460,51 @@ const RLB_SERVER_DEVELOPER_KEYS = [
   "weightPayout", "weightRate", "weightDeadhead", "weightTiming", "weightReposition",
 ];
 
+// Issue a fresh Bearer token for this carrier via /api/v1/init and cache it
+// in chrome.storage.local (both on the returned cfg and persisted), so
+// subsequent calls in this session and future ones reuse it without prompting
+// the user. The popup no longer collects a token manually — this is the only
+// place a token is minted.
+async function fetchInitToken(cfg, carrierCode) {
+  const url = initUrl(cfg) + "?carrier=" + encodeURIComponent(carrierCode);
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  const text = await res.text();
+  if (!res.ok) {
+    const err = new Error("init HTTP " + res.status + ": " + text.slice(0, 200));
+    await logError("background/fetchInitToken", err, { url: url, status: res.status });
+    throw err;
+  }
+  let data;
+  try { data = JSON.parse(text); } catch (e) { throw new Error("init response was not JSON"); }
+  const key = data && data.key;
+  if (!key) throw new Error("init response did not include a key");
+  return key;
+}
+
+// Make sure cfg.token is populated for this carrier, fetching+caching one via
+// /api/v1/init when missing. Mutates cfg.token in place and persists it, so
+// every downstream call (rlb-settings, active-driver-shifts, approved-places)
+// keeps reading cfg.token exactly as before.
+async function ensureToken(cfg, carrierCode) {
+  if (cfg.token) return cfg.token;
+  if (!carrierCode) {
+    const err = new Error("Carrier code not found on the Relay page — open a Relay Load Board page and try again.");
+    err.config = true;
+    throw err;
+  }
+  const key = await fetchInitToken(cfg, carrierCode);
+  cfg.token = key;
+  await chrome.storage.local.set({ token: key });
+  return key;
+}
+
 async function fetchRlbSettings(cfg, carrierCode) {
   if (!carrierCode) {
     const err = new Error("No carrier code found on the Relay page (#case-carrier-scac).");
     err.config = true;
     throw err;
   }
-  if (!cfg.token) {
-    const err = new Error("No API token set — enter the Bearer token in Developer settings.");
-    err.config = true;
-    throw err;
-  }
+  await ensureToken(cfg, carrierCode);
   const url = rlbSettingsUrl(cfg) + "?carrier_code=" + encodeURIComponent(carrierCode);
   const res = await fetch(url, { headers: { Accept: "application/json", Authorization: "Bearer " + cfg.token } });
   const text = await res.text();
@@ -1511,11 +1550,7 @@ async function fetchDriverSchedule(cfg) {
     err.config = true;
     throw err;
   }
-  if (!cfg.token) {
-    const err = new Error("No API token set — enter the Bearer token in Developer settings.");
-    err.config = true;
-    throw err;
-  }
+  await ensureToken(cfg, cfg.carrierCode);
   const url = activeDriverShiftsUrl(cfg) + "?carrier_code=" + encodeURIComponent(cfg.carrierCode);
   const res = await fetch(url, { headers: { Accept: "application/json", Authorization: "Bearer " + cfg.token } });
   const text = await res.text();
@@ -1707,11 +1742,12 @@ async function buildScheduleAvailability(tabId, cfg) {
   return out;
 }
 
-// Default scoring weights. Components are emitted in the output so ranking is
-// transparent and tunable — adjust here (or we can expose them in settings).
+// Default scoring weights, as percentages (normalised by their sum before use,
+// so they don't need to add up to exactly 100). Components are emitted in the
+// output so ranking is transparent and tunable — adjust here (or in FleetYes).
 // payout = total £ of the run (favours big jobs over tiny shuttles);
 // rate = £/mile; deadhead = empty miles to pickup; timing = how soon it starts.
-const PLANNER_WEIGHTS = { payout: 0.4, rate: 0.25, deadhead: 0.2, timing: 0.15, reposition: 0.2 };
+const PLANNER_WEIGHTS = { payout: 40, rate: 25, deadhead: 20, timing: 15, reposition: 20 };
 const HOUR_MS = 3600000;
 const r2 = (x) => Math.round(x * 100) / 100;
 const r3 = (x) => Math.round(x * 1000) / 1000;
@@ -1826,12 +1862,23 @@ function planLoadsForDriver(avail, response, cfg) {
   const maxRet = retVals.length ? Math.max(...retVals) : 0;
   const windowH = (upper - lower) / HOUR_MS;
 
-  const W = {
+  // Weights may arrive as raw fractions (0.4) or as percentages (40) — either
+  // way we normalise by their sum so the combined score always lands on 0..1,
+  // regardless of what scale FleetYes sends them on.
+  const Wraw = {
     payout: numOr(cfg && cfg.weightPayout, PLANNER_WEIGHTS.payout),
     rate: numOr(cfg && cfg.weightRate, PLANNER_WEIGHTS.rate),
     deadhead: numOr(cfg && cfg.weightDeadhead, PLANNER_WEIGHTS.deadhead),
     timing: numOr(cfg && cfg.weightTiming, PLANNER_WEIGHTS.timing),
     reposition: numOr(cfg && cfg.weightReposition, PLANNER_WEIGHTS.reposition),
+  };
+  const Wsum = Wraw.payout + Wraw.rate + Wraw.deadhead + Wraw.timing + Wraw.reposition || 1;
+  const W = {
+    payout: Wraw.payout / Wsum,
+    rate: Wraw.rate / Wsum,
+    deadhead: Wraw.deadhead / Wsum,
+    timing: Wraw.timing / Wsum,
+    reposition: Wraw.reposition / Wsum,
   };
   for (const e of enriched) {
     const payoutScore = e.payout / maxPayout;
@@ -2229,6 +2276,7 @@ async function fetchApprovedPlaces(cfg) {
     err.config = true;
     throw err;
   }
+  await ensureToken(cfg, cfg.carrierCode);
   const url = approvedPlacesUrl(cfg) + "?carrier_code=" + encodeURIComponent(cfg.carrierCode);
   const res = await fetch(url, { headers: { Accept: "application/json", Authorization: "Bearer " + cfg.token } });
   const text = await res.text();

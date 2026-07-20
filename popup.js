@@ -1,8 +1,10 @@
 // ─── RLB settings popup ───────────────────────────────────────────────────────
-// The popup now only holds the extension's CONNECTION setup: API URL, token,
-// carrier code and the Relay base URL. Planning rules, auto-refresh and scoring
-// weights live in FleetYes → Settings → RLB Settings and are synced into this
-// extension automatically per carrier (see syncRlbSettings in background.js).
+// The popup now only holds the extension's CONNECTION setup: API URL and the
+// Relay base URL. The Bearer token is no longer entered here — it's issued
+// automatically per carrier via /api/v1/init and cached by background.js
+// (see ensureToken). Planning rules, auto-refresh and scoring weights live in
+// FleetYes → Settings → RLB Settings and are synced into this extension
+// automatically per carrier (see syncRlbSettings in background.js).
 (function () {
   // Global safety net for this popup document — catches anything that escapes
   // normal try/catch so it lands in the durable errorLog instead of only
@@ -30,9 +32,10 @@
   const DEFAULTS = {
     relayBase: "https://relay.amazon.co.uk",
     ontrackUrl: "https://ontrack-api.agilecyber.com",
-    token: "",
     // carrierCode is no longer stored here — it's read live from the Relay page
     // (#case-carrier-scac) by the content script.
+    // token is no longer entered here either — background.js fetches and
+    // caches it automatically per carrier via /api/v1/init (see ensureToken).
     // Local, popup-only setting — deliberately NOT synced from FleetYes.
     searchLocation: "",
   };
@@ -43,7 +46,6 @@
     devSettings: $("devSettings"),
     searchLocation: $("searchLocation"),
     ontrackUrl: $("ontrackUrl"),
-    token: $("token"),
     saveDev: $("saveDev"),
   };
 
@@ -52,7 +54,6 @@
       const cfg = Object.assign({}, DEFAULTS, r || {});
       els.searchLocation.value = cfg.searchLocation || "";
       els.ontrackUrl.value = cfg.ontrackUrl;
-      els.token.value = cfg.token;
     });
   }
 
@@ -70,7 +71,8 @@
   }
 
   // Persist ONLY the connection keys, so a save can never clobber the
-  // server-synced planning/scoring settings sitting alongside them in storage.
+  // server-synced planning/scoring settings (or the auto-fetched token)
+  // sitting alongside them in storage.
   function saveSettings() {
     const cfg = {
       searchLocation: els.searchLocation.value.trim(),
@@ -78,7 +80,6 @@
       // Relay API calls always have a base (see cfg.relayBase in background.js).
       relayBase: DEFAULTS.relayBase,
       ontrackUrl: els.ontrackUrl.value.trim() || DEFAULTS.ontrackUrl,
-      token: els.token.value.trim(),
     };
     chrome.storage.local.set(cfg, flashSaved);
   }
