@@ -447,11 +447,6 @@
       el.style.bottom = "auto";
       return true;
     }
-    function clearEl(el) {
-      if (!el) return;
-      el.style.top = "auto"; el.style.left = "auto";
-      el.style.right = ""; el.style.bottom = "";
-    }
 
     var haveIcon = ir && ir.width && ir.bottom > 0 && ir.top < window.innerHeight;
     var haveCluster = fr && fr.width && fr.bottom > 0 && fr.top < window.innerHeight;
@@ -470,16 +465,29 @@
       // "Only my drivers" left of the Refresh toggle (or the icon if no toggle).
       placeLeft(only, (placedFy && fy) ? fy.getBoundingClientRect() : irS, 10);
     } else if (haveCluster && fy) {
-      // No icon yet — stack the toggle left of the cluster's right edge.
-      fy.style.top = Math.max(8, fr.top + (fr.height - (fy.offsetHeight || 34)) / 2) + "px";
-      fy.style.left = "auto";
-      fy.style.right = Math.max(8, window.innerWidth - fr.right + SHIFT) + "px";
-      fy.style.bottom = "auto";
-      placeLeft(only, fy.getBoundingClientRect(), 10);
-      clearEl(arCdEl);
+      // No icon yet — anchor to the cluster's right edge (shifted, same idea as
+      // the icon case) so the countdown still reserves its slot here too, instead
+      // of overlapping fy at their shared CSS default position.
+      var frS = { top: fr.top, height: fr.height, width: fr.width, bottom: fr.bottom, left: fr.right - SHIFT, right: fr.right - SHIFT };
+      placeLeft(arCdEl, frS, 8);
+      var cdWCluster = ((arCdEl && arCdEl.offsetWidth) || 160) + 6;
+      var cdSlotCluster = { top: frS.top, height: frS.height, width: cdWCluster, bottom: frS.bottom, left: frS.left - 8 - cdWCluster, right: frS.left - 8 };
+      var placedFyCluster = placeLeft(fy, cdSlotCluster, 8);
+      placeLeft(only, (placedFyCluster && fy) ? fy.getBoundingClientRect() : frS, 10);
     } else {
-      // Nothing to anchor to — fall back to the CSS bottom-right defaults.
-      clearEl(only); clearEl(fy); clearEl(arCdEl);
+      // Nothing to anchor to — Relay's refresh icon AND .refresh-and-chat-box are
+      // both gone (e.g. it's removed from the DOM while "Find my best loads" runs).
+      // only/fy/arCdEl all share the same CSS bottom-right default (bottom:14px;
+      // right:22px), so clearing their inline styles used to stack all three
+      // directly on top of each other — the countdown chip (lower z-index) landed
+      // hidden behind the Auto Refresh toggle. Anchor to a synthetic corner rect
+      // instead and lay them out left→right the same way the haveIcon branch does.
+      var corner = { top: window.innerHeight - 14 - 34, height: 34, width: 1, bottom: window.innerHeight - 14, left: window.innerWidth - 22, right: window.innerWidth - 22 };
+      placeLeft(arCdEl, corner, 8);
+      var cdWFallback = ((arCdEl && arCdEl.offsetWidth) || 160) + 6;
+      var cdSlotFallback = { top: corner.top, height: corner.height, width: cdWFallback, bottom: corner.bottom, left: corner.left - 8 - cdWFallback, right: corner.left - 8 };
+      var placedFyFallback = placeLeft(fy, cdSlotFallback, 8);
+      placeLeft(only, (placedFyFallback && fy) ? fy.getBoundingClientRect() : corner, 10);
     }
     hideLastUpdated();
     hideAutoRefreshToggle();
