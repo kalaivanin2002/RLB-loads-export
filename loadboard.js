@@ -125,7 +125,7 @@
       "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before,#rlb-fleetyes-refresh .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
       // Auto-refresh countdown chip — sits beside the Refresh toggle and shows
       // the remaining seconds until the next automatic board refresh.
-      "#rlb-ar-countdown{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:600 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:rgb(0,104,141);box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
+      "#rlb-ar-countdown{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;justify-content:center;white-space:nowrap;min-width:144px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:600 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:rgb(0,104,141);box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
       // "Next Refresh" label — sits to the LEFT of the countdown while the Refresh
       // toggle is on, so the row reads: Only my drivers | Next Refresh | 7s | Refresh.
       "#rlb-next-refresh-label{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
@@ -2005,8 +2005,8 @@
     if (typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
     arEnabled = !!r.arEnabled && autoRefreshRangeValid();
     reflectAutoRefreshToggle();
-    positionOnlyMine(); // reposition the row when the countdown shows/hides
     if (arEnabled) startAutoRefresh(); else stopAutoRefresh();
+    positionOnlyMine(); // reposition AFTER the countdown has its text (stable width)
   }
 
   // Read the popup-managed config from storage on boot, then start if enabled.
