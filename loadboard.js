@@ -124,8 +124,13 @@
       "#rlb-only-mine .rlb-switch input:checked + .rlb-slider,#rlb-fleetyes-refresh .rlb-switch input:checked + .rlb-slider{background:rgb(0,104,141);}",
       "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before,#rlb-fleetyes-refresh .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
       // Auto-refresh countdown chip — sits beside the Refresh toggle and shows
-      // the remaining seconds until the next automatic board refresh.
-      "#rlb-ar-countdown{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;justify-content:center;white-space:nowrap;min-width:160px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:600 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:rgb(0,104,141);box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
+      // the remaining seconds until the next automatic board refresh. box-sizing:
+      // border-box keeps its rendered width equal to min-width (160px) so the
+      // reserved-slot fallback in positionOnlyMine (which assumes 160px while the
+      // chip is display:none and offsetWidth reads 0) actually matches — without
+      // it, padding/border pushed the real width to 182px and the chip landed
+      // partly underneath the Auto Refresh toggle when switched on.
+      "#rlb-ar-countdown{box-sizing:border-box;position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;justify-content:center;white-space:nowrap;min-width:160px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:600 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:rgb(0,104,141);box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
       // "Next Refresh" label — sits to the LEFT of the countdown while the Refresh
       // toggle is on, so the row reads: Only my drivers | Next Refresh | 7s | Refresh.
       "#rlb-next-refresh-label{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
@@ -456,8 +461,10 @@
       placeLeft(arCdEl, irS, 8);
       // Always reserve the countdown's slot (its stable width, even while hidden)
       // so the toggle never overlaps it. offsetWidth is 0 while display:none → fall
-      // back to the CSS min-width (160), which matches the visible width.
-      var cdW = (arCdEl && arCdEl.offsetWidth) || 160;
+      // back to the CSS min-width (160), which matches the visible width. A few
+      // extra px of margin absorb any small font/rounding variance so the toggle
+      // group never crowds the timer's left edge.
+      var cdW = ((arCdEl && arCdEl.offsetWidth) || 160) + 6;
       var cdSlot = { top: irS.top, height: irS.height, width: cdW, bottom: irS.bottom, left: irS.left - 8 - cdW, right: irS.left - 8 };
       var placedFy = placeLeft(fy, cdSlot, 8);
       // "Only my drivers" left of the Refresh toggle (or the icon if no toggle).
