@@ -415,75 +415,56 @@
   function positionOnlyMine() {
     var only = document.getElementById("rlb-only-mine");
     if (!only) return;
-    // Anchor to the whole refresh/auto-refresh cluster (.refresh-and-chat-box)
-    // and sit the toggle just to its LEFT, so it always reads as BEFORE "Turn on
-    // auto-refresh" regardless of the icon/switch order inside the box. Fall back
-    // to the refresh button, then the CSS bottom-right default, if absent.
-    var anchorEl = document.querySelector(".refresh-and-chat-box");
-    if (!anchorEl) {
-      var refresh = findRelayRefreshControl();
-      anchorEl = (refresh && (refresh.closest ? refresh.closest(".refresh-and-chat-box") : null)) || refresh;
-    }
-    if (!anchorEl) {
-      // Not rendered yet — clear any prior overrides so the CSS default applies.
-      only.style.top = "auto"; only.style.left = "auto";
-      only.style.right = ""; only.style.bottom = "";
-    } else {
-      var r = anchorEl.getBoundingClientRect();
-      if (r.width && r.top < window.innerHeight && r.bottom > 0) {
-        var onlyH = only.offsetHeight || 34;
-        var center = r.top + r.height / 2;
-        only.style.top = Math.max(8, center - onlyH / 2) + "px";
-        only.style.left = "auto";
-        only.style.right = Math.max(8, window.innerWidth - r.left + 10) + "px";
-        only.style.bottom = "auto";
-      } else {
-        // Footer scrolled out of view → fall back to the CSS bottom-right default.
-        only.style.top = "auto"; only.style.left = "auto";
-        only.style.right = ""; only.style.bottom = "";
-      }
-    }
-    // Place the "Refresh" toggle immediately to the LEFT of Relay's manual
-    // refresh icon (findRelayRefreshControl), on the same baseline. Falls back to
-    // the cluster's right edge, then to just left of the "Only my driver
-    // locations" chip, if the icon isn't found.
     var fy = document.getElementById("rlb-fleetyes-refresh");
-    if (fy) {
-      var fyH = fy.offsetHeight || 34;
-      var iconBtn = findRelayRefreshControl();
-      var ir = iconBtn && iconBtn.getBoundingClientRect();
-      var box2 = document.querySelector(".refresh-and-chat-box");
-      var fr = box2 && box2.getBoundingClientRect();
-      if (ir && ir.width && ir.bottom > 0 && ir.top < window.innerHeight) {
-        fy.style.top = Math.max(8, ir.top + (ir.height - fyH) / 2) + "px";
-        fy.style.left = "auto";
-        fy.style.right = Math.max(8, window.innerWidth - ir.left + 8) + "px";
-        fy.style.bottom = "auto";
-      } else if (fr && fr.width && fr.bottom > 0 && fr.top < window.innerHeight) {
-        fy.style.top = Math.max(8, fr.top + (fr.height - fyH) / 2) + "px";
-        fy.style.left = "auto";
-        fy.style.right = Math.max(8, window.innerWidth - fr.right) + "px";
-        fy.style.bottom = "auto";
-      } else {
-        var oRect = only.getBoundingClientRect();
-        if (oRect.width) {
-          fy.style.top = Math.max(8, oRect.top) + "px";
-          fy.style.left = "auto";
-          fy.style.right = Math.max(8, window.innerWidth - oRect.left + 10) + "px";
-          fy.style.bottom = "auto";
-        }
-      }
-    }
-    // Place the countdown chip immediately to the LEFT of the Refresh toggle.
     var arCdEl = document.getElementById("rlb-ar-countdown");
-    if (arCdEl && fy) {
-      var fRect = fy.getBoundingClientRect();
-      if (fRect.width) {
-        arCdEl.style.top = Math.max(8, fRect.top) + "px";
-        arCdEl.style.left = "auto";
-        arCdEl.style.right = Math.max(8, window.innerWidth - fRect.left + 8) + "px";
-        arCdEl.style.bottom = "auto";
-      }
+
+    // Bottom row, left → right: Only my drivers | Refresh | "Next Refresh 7s" | refresh icon.
+    // Position right → left so each chip anchors to the one on its right.
+    var iconBtn = findRelayRefreshControl();
+    var ir = iconBtn && iconBtn.getBoundingClientRect();
+    var box2 = document.querySelector(".refresh-and-chat-box");
+    var fr = box2 && box2.getBoundingClientRect();
+
+    // Place `el` immediately LEFT of `anchorRect` on the same baseline; gap is the
+    // px between el's right edge and the anchor's left edge. Returns true if placed.
+    function placeLeft(el, anchorRect, gap) {
+      if (!el || !anchorRect || !anchorRect.width) return false;
+      var h = el.offsetHeight || 34;
+      el.style.top = Math.max(8, anchorRect.top + (anchorRect.height - h) / 2) + "px";
+      el.style.left = "auto";
+      el.style.right = Math.max(8, window.innerWidth - anchorRect.left + (gap || 8)) + "px";
+      el.style.bottom = "auto";
+      return true;
+    }
+    function clearEl(el) {
+      if (!el) return;
+      el.style.top = "auto"; el.style.left = "auto";
+      el.style.right = ""; el.style.bottom = "";
+    }
+
+    var haveIcon = ir && ir.width && ir.bottom > 0 && ir.top < window.innerHeight;
+    var haveCluster = fr && fr.width && fr.bottom > 0 && fr.top < window.innerHeight;
+
+    if (haveIcon) {
+      // Countdown left of the icon (positioned even while hidden, so it's ready).
+      placeLeft(arCdEl, ir, 8);
+      // Refresh toggle left of the countdown when it's visible, else left of icon.
+      var cdRect = arCdEl && arCdEl.getBoundingClientRect();
+      var fyAnchor = (cdRect && cdRect.width) ? cdRect : ir;
+      var placedFy = placeLeft(fy, fyAnchor, 8);
+      // "Only my drivers" left of the Refresh toggle (or the icon if no toggle).
+      placeLeft(only, (placedFy && fy) ? fy.getBoundingClientRect() : ir, 10);
+    } else if (haveCluster && fy) {
+      // No icon yet — stack the toggle left of the cluster's right edge.
+      fy.style.top = Math.max(8, fr.top + (fr.height - (fy.offsetHeight || 34)) / 2) + "px";
+      fy.style.left = "auto";
+      fy.style.right = Math.max(8, window.innerWidth - fr.right) + "px";
+      fy.style.bottom = "auto";
+      placeLeft(only, fy.getBoundingClientRect(), 10);
+      clearEl(arCdEl);
+    } else {
+      // Nothing to anchor to — fall back to the CSS bottom-right defaults.
+      clearEl(only); clearEl(fy); clearEl(arCdEl);
     }
     hideLastUpdated();
     hideAutoRefreshToggle();
@@ -2024,6 +2005,7 @@
     if (typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
     arEnabled = !!r.arEnabled && autoRefreshRangeValid();
     reflectAutoRefreshToggle();
+    positionOnlyMine(); // reposition the row when the countdown shows/hides
     if (arEnabled) startAutoRefresh(); else stopAutoRefresh();
   }
 
