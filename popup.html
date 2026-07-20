@@ -35,11 +35,11 @@
         <input id="ontrackUrl" type="text" placeholder="https://ontrack-api.agilecyber.com" />
         <small class="field-hint">FleetYes/OnTrack base — also used to derive the approved-places and RLB settings endpoints.</small>
       </label>
-      <label class="field">
-        <span>Bearer token</span>
-        <input id="token" type="password" placeholder="flb_live_…" />
-        <small class="field-hint">FleetYes API key. Stored only in this browser — never committed to code.</small>
-      </label>
+      <p class="field-hint" style="margin: 4px 0 0;">
+        The Bearer token is issued automatically for your carrier (via
+        <code>/api/v1/init</code>) and cached in this browser — no need to
+        enter it manually.
+      </p>
       <button id="saveDev" class="btn-secondary" type="button">Save settings</button>
     </div>
   </div>
