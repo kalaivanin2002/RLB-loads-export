@@ -125,7 +125,7 @@
       "#rlb-only-mine .rlb-switch input:checked + .rlb-slider::before,#rlb-fleetyes-refresh .rlb-switch input:checked + .rlb-slider::before{transform:translateX(16px);}",
       // Auto-refresh countdown chip — sits beside the Refresh toggle and shows
       // the remaining seconds until the next automatic board refresh.
-      "#rlb-ar-countdown{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;justify-content:center;white-space:nowrap;min-width:144px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:600 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:rgb(0,104,141);box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
+      "#rlb-ar-countdown{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;justify-content:center;white-space:nowrap;min-width:160px;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:600 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:rgb(0,104,141);box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
       // "Next Refresh" label — sits to the LEFT of the countdown while the Refresh
       // toggle is on, so the row reads: Only my drivers | Next Refresh | 7s | Refresh.
       "#rlb-next-refresh-label{position:fixed;bottom:14px;right:22px;z-index:2147483000;display:none;align-items:center;background:#fff;border:1px solid #d5dbe5;border-radius:6px;padding:8px 10px;font:500 13px/1 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;box-shadow:0 1px 4px rgba(15,23,42,.12);user-select:none;}",
@@ -264,7 +264,7 @@
     var fy = document.createElement("label");
     fy.id = "rlb-fleetyes-refresh";
     fy.title = "Auto refresh — refresh the board on a randomized timer";
-    fy.innerHTML = '<span class="rlb-switch"><input id="rlb-fleetyes-refresh-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Refresh</span>';
+    fy.innerHTML = '<span class="rlb-switch"><input id="rlb-fleetyes-refresh-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Auto Refresh</span>';
     document.body.appendChild(fy);
     var fyCb = fy.querySelector("#rlb-fleetyes-refresh-cb");
     fyCb.checked = arEnabled;
@@ -425,6 +425,12 @@
     var box2 = document.querySelector(".refresh-and-chat-box");
     var fr = box2 && box2.getBoundingClientRect();
 
+    // SHIFT pulls the whole chip group this many px further LEFT of the refresh icon.
+    // We anchor to a copy of the icon rect shifted SHIFT px right, so every chip
+    // (directly or indirectly) anchored to it moves SHIFT px left — inter-chip gaps unchanged.
+    var SHIFT = 16;
+    var irS = ir ? { top: ir.top, height: ir.height, width: ir.width, bottom: ir.bottom, left: ir.left - SHIFT, right: ir.right - SHIFT } : null;
+
     // Place `el` immediately LEFT of `anchorRect` on the same baseline; gap is the
     // px between el's right edge and the anchor's left edge. Returns true if placed.
     function placeLeft(el, anchorRect, gap) {
@@ -446,19 +452,19 @@
     var haveCluster = fr && fr.width && fr.bottom > 0 && fr.top < window.innerHeight;
 
     if (haveIcon) {
-      // Countdown left of the icon (positioned even while hidden, so it's ready).
-      placeLeft(arCdEl, ir, 8);
-      // Refresh toggle left of the countdown when it's visible, else left of icon.
+      // Countdown left of the (shifted) icon — positioned even while hidden, so ready.
+      placeLeft(arCdEl, irS, 8);
+      // Refresh toggle left of the countdown when it's visible, else left of the icon.
       var cdRect = arCdEl && arCdEl.getBoundingClientRect();
-      var fyAnchor = (cdRect && cdRect.width) ? cdRect : ir;
+      var fyAnchor = (cdRect && cdRect.width) ? cdRect : irS;
       var placedFy = placeLeft(fy, fyAnchor, 8);
       // "Only my drivers" left of the Refresh toggle (or the icon if no toggle).
-      placeLeft(only, (placedFy && fy) ? fy.getBoundingClientRect() : ir, 10);
+      placeLeft(only, (placedFy && fy) ? fy.getBoundingClientRect() : irS, 10);
     } else if (haveCluster && fy) {
       // No icon yet — stack the toggle left of the cluster's right edge.
       fy.style.top = Math.max(8, fr.top + (fr.height - (fy.offsetHeight || 34)) / 2) + "px";
       fy.style.left = "auto";
-      fy.style.right = Math.max(8, window.innerWidth - fr.right) + "px";
+      fy.style.right = Math.max(8, window.innerWidth - fr.right + SHIFT) + "px";
       fy.style.bottom = "auto";
       placeLeft(only, fy.getBoundingClientRect(), 10);
       clearEl(arCdEl);
@@ -1961,7 +1967,7 @@
     var cd = document.getElementById("rlb-ar-countdown");
     if (!cd) return;
     var remaining = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
-    cd.textContent = "Next Refresh " + remaining + "s";
+    cd.textContent = "Next Refresh In " + remaining + "s";
   }
   function startCountdown() {
     if (arCountdownTimer) return;
