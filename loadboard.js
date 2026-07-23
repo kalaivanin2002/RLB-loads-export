@@ -35,6 +35,7 @@
   var arTimer = null;                       // setTimeout handle for the next refresh
   var arRescoreTimer = null;                // follow-up timer that re-scores after a refresh
   var lastScoredSearchAt = 0;               // lastSearchAt we last handed to scoreAndPaint
+  var arInteractionListenersAttached = false; // are the "user is using the page" listeners live?
 
   var esc = function (s) {
     return s == null ? "" : String(s).replace(/[&<>"']/g, function (c) {
@@ -1976,6 +1977,45 @@
     if (arRescoreTimer) { clearTimeout(arRescoreTimer); arRescoreTimer = null; }
   }
 
+  // Stop auto-refresh as soon as the user is actually using the Relay page, so
+  // our timed clicks never fight a driver mid-click/mid-scroll/mid-typing. Only
+  // listens while a refresh is actually scheduled (attached in startAutoRefresh,
+  // detached in stopAutoRefresh) so idle pages carry zero extra listeners.
+  var AR_INTERACTION_EVENTS = ["click", "mousedown", "keydown", "input", "change", "scroll", "wheel", "touchstart"];
+
+  // Our own controls (the Refresh toggle, results card, etc.) are real page
+  // elements too — interacting with THEM isn't "using the Relay page" and must
+  // not immediately cancel a refresh the user just turned on.
+  function isOwnUiTarget(node) {
+    return !!(node && node.nodeType === 1 && node.closest &&
+      node.closest("#rlb-launch, #rlb-only-mine, #rlb-fleetyes-refresh, #rlb-ar-countdown, #rlb-card, #rlb-drivers, #rlb-tip"));
+  }
+
+  function onUserInteraction(e) {
+    // doAutoRefresh() clicks Relay's own refresh button programmatically — that
+    // synthetic click is untrusted, so this ignores our own tick instead of
+    // self-cancelling on every cycle.
+    if (!e.isTrusted) return;
+    if (isOwnUiTarget(e.target)) return;
+    stopAutoRefresh();
+  }
+
+  function attachInteractionListeners() {
+    if (arInteractionListenersAttached) return;
+    arInteractionListenersAttached = true;
+    AR_INTERACTION_EVENTS.forEach(function (type) {
+      document.addEventListener(type, onUserInteraction, { capture: true, passive: true });
+    });
+  }
+
+  function detachInteractionListeners() {
+    if (!arInteractionListenersAttached) return;
+    arInteractionListenersAttached = false;
+    AR_INTERACTION_EVENTS.forEach(function (type) {
+      document.removeEventListener(type, onUserInteraction, true);
+    });
+  }
+
   // Min ≤ Max is required; refuse to run while the range is invalid.
   function autoRefreshRangeValid() { return arMin <= arMax; }
 
@@ -2026,12 +2066,14 @@
   function startAutoRefresh() {
     clearAutoRefreshTimer();
     if (!arEnabled || !autoRefreshRangeValid()) return;
+    attachInteractionListeners();
     scheduleNextRefresh();
   }
 
   function stopAutoRefresh() {
     clearAutoRefreshTimer();
     stopCountdown();
+    detachInteractionListeners();
   }
 
   // Apply auto-refresh config (from storage): clamp, validate, and (re)start/stop.
