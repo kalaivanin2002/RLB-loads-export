@@ -145,11 +145,9 @@
       // Hide non-matching load cards when the filter is on (data-attr = React-safe,
       // same approach as the highlight outline — we never touch Relay's child nodes).
       "[data-rlb-hidden]{display:none!important;}",
-      // When the filter is on, the only visible cards are matches — so the outline,
-      // tint and badge are redundant. Suppress them (data-rlb-match stays on the node
-      // for counting / step-through; only its visual styling is neutralised here).
-      "html[data-rlb-filter] [data-rlb-match]{outline:none!important;background:transparent!important;}",
-      "html[data-rlb-filter] [data-rlb-badge]::after{display:none!important;}",
+      // When the filter is on, the visible cards are matches — keep the highlight
+      // (outline, tint and "▲ N drivers" badge) so the matched rows still stand out
+      // instead of rendering as plain rows.
       // Progress / result card.
       "#rlb-card,#rlb-card *{box-sizing:border-box;}",
       "#rlb-card{position:fixed;top:122px;right:22px;width:340px;max-width:92vw;z-index:2147483000;background:#fff;border:1px solid #e5e9f0;border-radius:14px;box-shadow:0 14px 44px rgba(15,23,42,.24);font:13px/1.5 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;overflow:hidden;display:none;}",
@@ -220,7 +218,7 @@
     var btn = document.createElement("button");
     btn.id = "rlb-launch";
     btn.type = "button";
-    btn.innerHTML = '<span class="bolt">⚡</span><span class="lbl">Find my best loads</span>';
+    btn.innerHTML = '<span class="lbl">Find my best loads</span>';
     btn.title = "Find loads for ALL your drivers — those finishing trips plus idle (unassigned) drivers.";
     document.body.appendChild(btn);
     btn.addEventListener("click", function () {
@@ -1058,6 +1056,63 @@
     return delay(300);
   }
 
+  // How far ahead to look for pickups, in hours. Mirrors the planner's
+  // maxWaitHours (background.js) so the on-page board shows the same 48h
+  // horizon the per-driver scoring uses.
+  var LOOKAHEAD_HOURS = 48;
+
+  // Relay's Start/End filters are two masked text inputs each: a date
+  // (DD/MM/YYYY) and a time (HH:mm, 24-hour). These are their real DOM ids.
+  function dateInputs() {
+    return {
+      startDate: document.getElementById("rlb-start-date-filter"),
+      startTime: document.getElementById("rlb-start-time-filter"),
+      endDate: document.getElementById("rlb-end-date-filter"),
+      endTime: document.getElementById("rlb-end-time-filter"),
+    };
+  }
+
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+  // Format a Date as it appears in the driver's local timezone (which is what
+  // the Relay board displays and expects), not UTC.
+  function fmtDate(d) { return pad2(d.getDate()) + "/" + pad2(d.getMonth() + 1) + "/" + d.getFullYear(); }
+  function fmtTime(d) { return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); }
+
+  // Fill the Start (now) and End (now + LOOKAHEAD_HOURS) date/time filters so
+  // the board only shows loads picking up within the look-ahead window. The
+  // inputs are React-controlled, so set each via nativeSetValue and let its
+  // input event re-run Relay's live search.
+  function setDateRange() {
+    var f = dateInputs();
+    if (!f.startDate && !f.endDate) {
+      console.log("[RLB fill] date filter inputs not found — skipping date range");
+      return Promise.resolve();
+    }
+    var now = new Date();
+    var end = new Date(now.getTime() + LOOKAHEAD_HOURS * 60 * 60 * 1000);
+    var pairs = [
+      [f.startDate, fmtDate(now)],
+      [f.startTime, fmtTime(now)],
+      [f.endDate, fmtDate(end)],
+      [f.endTime, fmtTime(end)],
+    ];
+    var chain = Promise.resolve();
+    pairs.forEach(function (p) {
+      var el = p[0], val = p[1];
+      if (!el) return;
+      chain = chain.then(function () {
+        el.focus();
+        nativeSetValue(el, val);
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.blur();
+        return delay(150); // let Relay's masked input re-render before the next field
+      });
+    });
+    return chain.catch(function (e) {
+      console.log("[RLB fill] date range fill failed:", e && e.message);
+    });
+  }
+
   // "New search" leaves Radius at Relay's default (50) — force it to
   // SEARCH_RADIUS_MI every round, same reasoning as setEquipment above.
   function setRadius() {
@@ -1202,7 +1257,12 @@
     }).then(function () {
       return setEquipment(); // New search clears equipment; restore it or search blanks
     }).then(function () {
-      return closeOverlays(); // dismiss the equipment popover before Search
+      return closeOverlays(); // dismiss the equipment popover before the date fields
+    }).then(function () {
+      // Constrain the board to the look-ahead window: Start = now, End = now + 48h.
+      return setDateRange();
+    }).then(function () {
+      return closeOverlays(); // dismiss any date popover before Search
     }).then(function () {
       var sb = findSearchButton();
       if (sb && !sb.disabled) { realClick(sb); return delay(600); }
