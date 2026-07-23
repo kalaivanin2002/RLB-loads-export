@@ -1447,11 +1447,10 @@ function initUrl(cfg) {
 //
 // Only the keys the server owns are written; local-only keys (token, ontrackUrl,
 // carrierCode, the harvest knobs, etc.) are left untouched.
-// NOTE: searchLocation is deliberately NOT here — it is a LOCAL, popup-only
-// setting the user enters per browser, so the FleetYes sync must never overwrite
-// it. All the other planning rules are server-owned.
+// searchLocation now comes FROM the server (rlb-settings response) — it's the
+// single origin all loads are searched from. All planning rules are server-owned.
 const RLB_SERVER_PLANNING_KEYS = [
-  "nearbyRadius", "minTripMiles", "restHours",
+  "searchLocation", "nearbyRadius", "minTripMiles", "restHours",
   "availabilityLeadHours", "maxWaitHours", "gapBeforeNextHours",
   "deadheadMph", "matchEquipment",
 ];
@@ -2421,19 +2420,45 @@ async function buildRelayTripsAvailability(tab, cfg) {
   }
   const entities = inTransit.concat(upcoming);
   const availability = buildAvailability(entities, cfg);
-  console.log("[RLB availability] FALLBACK built " + availability.length + " trip-based driver(s).");
+  console.log("[RLB availability] built " + availability.length + " trip-based driver(s).");
 
   // Fold in unassigned drivers too — non-fatal if this leg fails.
   let combined = availability;
   try {
     const allDrivers = await fetchAllDrivers(tab.id, cfg);
     const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
-    console.log("[RLB availability] FALLBACK " + unassigned.length + " unassigned driver(s).");
+    console.log("[RLB availability] " + unassigned.length + " unassigned driver(s).");
     combined = availability.concat(unassigned);
   } catch (e) {
     await logError("background/buildRelayTripsAvailability/unassignedDrivers", e);
   }
+
+  // Search origin = the single configured Search Location (from rlb-settings),
+  // NOT each driver's own drop-off. Resolve it once and stamp it on every driver's
+  // freeLocation, so buildCityList produces ONE search city (all drivers matched
+  // from that location). Driver timing/identity is preserved.
+  await applySearchLocation(tab.id, cfg, combined);
   return combined;
+}
+
+// Resolve cfg.searchLocation → coords and overwrite freeLocation on every record.
+// Required: with no Search Location there's no origin to search from → config error.
+async function applySearchLocation(tabId, cfg, records) {
+  const searchLoc = (cfg.searchLocation || "").trim();
+  if (!searchLoc) {
+    const err = new Error("No Search Location set for this carrier (rlb-settings). Set it in FleetYes.");
+    err.config = true;
+    throw err;
+  }
+  const c = await lookupCityCoords(tabId, cfg, searchLoc);
+  if (!c) {
+    const err = new Error('Could not resolve Search Location "' + searchLoc + '" to coordinates.');
+    err.config = true;
+    throw err;
+  }
+  const loc = { city: c.name, country: c.country || null, latitude: c.latitude, longitude: c.longitude };
+  for (const r of records) { r.freeLocation = loc; }
+  console.log('[RLB availability] search origin overridden to Search Location "' + searchLoc + '" for ' + records.length + " driver(s).");
 }
 
 // ── FALLBACK: original Relay unassigned-only availability ────────────────────
@@ -2471,10 +2496,19 @@ async function refreshAvailabilityOnly(carrierCode) {
   cfg.carrierCode = (carrierCode || "").trim();
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
+
+  // ── TEMPORARY: schedule API (active-driver-shifts) is the MAIN flow, but it's
+  // held for now. The Relay-trips flow (formerly the fallback) is being used as
+  // the main flow. Source is "relay-trips-main" (NOT "…-fallback") so the on-page
+  // "shifts unavailable" banner stays hidden — this is intentional, not a failure.
+  // To restore the schedule API as primary, uncomment the block below and remove
+  // the direct Relay-trips call that follows it.
+  let availability, source = "relay-trips-main", apiError = null;
+  /*
   // Primary: shifts API (active-driver-shifts). A Relay tab is still needed to
   // resolve any missing home city to coordinates via the cities endpoint.
   // Fallback: the original Relay-trips availability when the API fails.
-  let availability, source = "schedule-api", apiError = null;
+  source = "schedule-api";
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
     console.log("[RLB availability] ✓ shifts API OK — " + availability.length + " driver(s) via schedule-api.");
@@ -2498,6 +2532,17 @@ async function refreshAvailabilityOnly(carrierCode) {
       await logError("background/refreshAvailabilityOnly/fallback", e2);
       return { ok: false, error: "Shifts API failed (" + apiError + ") and Relay-trips fallback also failed: " + ((e2 && e2.message) || e2) };
     }
+  }
+  */
+
+  // Relay-trips flow used directly as the main flow (schedule API held).
+  try {
+    availability = await buildRelayTripsAvailability(tab, cfg);
+  } catch (e) {
+    await logError("background/refreshAvailabilityOnly/relayTrips", e);
+    // Config errors (e.g. no Search Location from rlb-settings) surface as config.
+    if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
+    return { ok: false, error: (e && e.message) || String(e) };
   }
   console.log("[RLB availability] source=" + source + ", " + availability.length + " driver(s). JSON:", JSON.stringify(availability, null, 2));
   await chrome.storage.local.set({
