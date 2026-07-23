@@ -2087,7 +2087,21 @@
     // self-cancelling on every cycle.
     if (!e.isTrusted) return;
     if (isOwnUiTarget(e.target)) return;
+    // A real interaction fully TURNS OFF auto-refresh — same as flipping the
+    // toggle off. Just stopping the timer left arEnabled=true + the toggle ON,
+    // so the countdown vanished but the state lied and could silently restart.
+    disableAutoRefreshByInteraction();
+  }
+
+  // Turn auto-refresh fully OFF because the user is interacting with the page.
+  // Mirrors the toggle-off path: clears timers, flips arEnabled false, updates the
+  // toggle checkbox, and persists so every listener/repaint agrees it's off.
+  function disableAutoRefreshByInteraction() {
+    arEnabled = false;
     stopAutoRefresh();
+    reflectAutoRefreshToggle();
+    positionOnlyMine();
+    try { chrome.storage.local.set({ arEnabled: false }); } catch (e) { /* context invalidated */ }
   }
 
   function attachInteractionListeners() {
