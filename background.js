@@ -20,7 +20,7 @@ const DEFAULTS = {
   relayBase: "https://relay.amazon.co.uk",
   // Bare host base. Each endpoint appends its own path: shifts → /api/v1/…,
   // rlb-settings → /v1/… (see activeDriverShiftsUrl / rlbSettingsUrl).
-  ontrackUrl: "https://ontrack-api.agilecyber.com",
+  ontrackUrl: "https://afp-api.fleetyes.com",
   ingestUrl: "",
   token: "",
   carrierCode: "", // e.g. "AMRTL" — used for the FleetYes approved-places lookup
@@ -1406,7 +1406,7 @@ function buildAvailability(entities, cfg) {
 // location is still parsed and kept (apiLocation) for other uses. Equipment stays
 // null (the equipment filter skips loads only when both sides are known → no filter).
 
-// The OnTrack base URL is now a bare host (https://ontrack-api.agilecyber.com/).
+// The OnTrack base URL is now a bare host (https://afp-api.fleetyes.com/).
 // Each endpoint appends its own path prefix onto the scheme+host origin, so a
 // stray path on the setting (e.g. a legacy …/api/v1) never doubles up.
 function ontrackOrigin(cfg) {
