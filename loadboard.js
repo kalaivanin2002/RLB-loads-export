@@ -15,6 +15,7 @@
   var driverCount = 0;
   var driverAt = null;
   var onlyMyDrivers = false; // "only my driver locations" filter — hide unmatched load cards
+  var nearbyBannerDismissed = false; // user closed the "Nearby Loads" banner for this filter session
   var lastDriverError = null; // set by refreshDriversAsync on failure, shown in the "No drivers found" card
   var lastDriverErrorConfig = false; // true when lastDriverError is a config problem (missing settings)
   var lastAvailabilitySource = null; // "schedule-api" | "relay-trips-fallback" — from the last refresh
@@ -201,6 +202,22 @@
       "#rlb-drivers th{position:sticky;top:0;background:#0b0f19!important;font-weight:600;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.04em;z-index:1;}",
       "#rlb-drivers tr.warn td{background:rgba(239,68,68,.16)!important;color:#ff6b6b;}",
       "#rlb-drivers .sub{color:#94a3b8;font-size:11px;}",
+      // "Nearby Loads" banner — sits between the "Showing X of Y results" line and
+      // the load list when "Only my driver locations" is on. Positioned absolutely
+      // (document coords, via positionNearbyBanner) rather than inserted into
+      // Relay's React-managed results column — see the note at the top of this file
+      // on why we never add child nodes there. Styled to match the rest of the
+      // extension's UI (white card, teal accent, slate text) rather than the ad-hoc
+      // green mock — see #rlb-only-mine / #rlb-card for the same palette.
+      "#rlb-nearby-banner,#rlb-nearby-banner *{box-sizing:border-box;}",
+      "#rlb-nearby-banner{position:absolute;z-index:2147483000;display:none;align-items:flex-start;gap:10px;background:#fff;border:1px solid #d5dbe5;border-radius:8px;padding:12px 14px;box-shadow:0 1px 4px rgba(15,23,42,.12);font:13px/1.4 \"Amazon Ember\",-apple-system,Segoe UI,Roboto,sans-serif;color:#1e293b;}",
+      "#rlb-nearby-banner.show{display:flex;}",
+      "#rlb-nearby-banner .rlb-nb-icon{flex:none;width:28px;height:28px;border-radius:50%;background:rgba(0,104,141,.1);color:rgb(0,104,141);display:flex;align-items:center;justify-content:center;font-size:14px;}",
+      "#rlb-nearby-banner .rlb-nb-text{flex:1;min-width:0;}",
+      "#rlb-nearby-banner .rlb-nb-title{font-weight:700;color:#0f172a;margin-bottom:2px;}",
+      "#rlb-nearby-banner .rlb-nb-sub{color:#64748b;}",
+      "#rlb-nearby-banner button{flex:none;background:transparent;border:none;color:#94a3b8;font-size:16px;line-height:1;cursor:pointer;padding:2px;}",
+      "#rlb-nearby-banner button:hover{color:#475569;}",
     ].join("");
     var st = document.createElement("style");
     st.id = "rlb-style";
@@ -266,6 +283,7 @@
     onlyCb.checked = onlyMyDrivers;
     onlyCb.addEventListener("change", function () {
       onlyMyDrivers = onlyCb.checked;
+      if (onlyMyDrivers) nearbyBannerDismissed = false; // re-arm the banner each time the filter is (re-)enabled
       try { chrome.storage.local.set({ onlyMyDrivers: onlyMyDrivers }); } catch (e) { /* context invalidated */ }
       schedulePaint();
     });
@@ -304,6 +322,24 @@
     var minBtn = card.querySelector("#rlb-card-min");
     if (minBtn) minBtn.addEventListener("click", toggleMinCard);
 
+    // "Nearby Loads" banner — explains, right above the list, that the results
+    // below are filtered to loads near your drivers' current locations. Lives in
+    // the results column (not fixed to the viewport), so it scrolls with the page —
+    // see positionNearbyBanner for how its position tracks the "Showing X of Y
+    // results" line above it.
+    var nearby = document.createElement("div");
+    nearby.id = "rlb-nearby-banner";
+    nearby.innerHTML =
+      '<span class="rlb-nb-icon">📍</span>' +
+      '<div class="rlb-nb-text"><div class="rlb-nb-title">Nearby Loads</div>' +
+      "<div class=\"rlb-nb-sub\">Showing loads near your drivers&#8217; current locations.</div></div>" +
+      '<button type="button" id="rlb-nearby-banner-x" title="Dismiss">&times;</button>';
+    document.body.appendChild(nearby);
+    nearby.querySelector("#rlb-nearby-banner-x").addEventListener("click", function () {
+      nearbyBannerDismissed = true;
+      nearby.classList.remove("show");
+    });
+
     positionLauncher();
     window.addEventListener("scroll", positionLauncher, true);
     window.addEventListener("resize", positionLauncher);
@@ -314,6 +350,8 @@
     positionOnlyMine();
     window.addEventListener("resize", positionOnlyMine);
     window.setTimeout(positionOnlyMine, 1200);
+
+    window.addEventListener("resize", positionNearbyBanner);
   }
 
   // Anchor the floating launcher to the search panel's top-right so it reads as
@@ -499,6 +537,57 @@
     }
     hideLastUpdated();
     hideAutoRefreshToggle();
+  }
+
+  // Find Relay's "Showing X of Y results" line above the load list — the
+  // tightest element whose text matches, same "smallest matching node" approach
+  // as findLastUpdatedEl. Text is sometimes split across inline spans, so we
+  // match on textContent (not a single leaf) and prefer the node with the
+  // fewest descendants.
+  function findResultsCountEl() {
+    var nodes = document.querySelectorAll("body *");
+    var re = /^showing\s+[\d,]+(\s*[-–—]\s*[\d,]+)?\s+of\s+[\d,]+\s+results?\.?$/i;
+    var best = null;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (n.id === "rlb-nearby-banner" || (n.closest && n.closest("#rlb-nearby-banner"))) continue;
+      var t = (n.textContent || "").replace(/\s+/g, " ").trim();
+      if (t && re.test(t)) {
+        if (!best || n.querySelectorAll("*").length < best.querySelectorAll("*").length) best = n;
+      }
+    }
+    return best;
+  }
+
+  // Position the "Nearby Loads" banner in document coordinates, just below the
+  // "Showing X of Y results" line and spanning the same width as the load list —
+  // it's a real (absolutely positioned) node, not one inserted into Relay's React
+  // tree, so it scrolls with the page like any other in-flow content.
+  function positionNearbyBanner() {
+    var banner = document.getElementById("rlb-nearby-banner");
+    if (!banner || !banner.classList.contains("show")) return;
+    var textEl = findResultsCountEl();
+    var cards = document.querySelectorAll("div.load-card");
+    var listRect = cards.length ? cards[0].getBoundingClientRect() : null;
+    var textRect = textEl ? textEl.getBoundingClientRect() : null;
+    if (!textRect && !listRect) return; // neither anchor is on screen yet
+    var left = listRect ? listRect.left : textRect.left;
+    var width = listRect ? listRect.width : textRect.width;
+    var top = (textRect ? textRect.bottom : listRect.top) + 10;
+    banner.style.left = Math.round(left + window.pageXOffset) + "px";
+    banner.style.width = Math.max(240, Math.round(width)) + "px";
+    banner.style.top = Math.round(top + window.pageYOffset) + "px";
+  }
+
+  // Show/hide the banner for the current paint. Only relevant while "only my
+  // driver locations" is on AND we actually have scored matches to explain —
+  // same condition doPaint uses to decide whether to hide non-matching cards.
+  function updateNearbyBanner(shouldShow) {
+    var banner = document.getElementById("rlb-nearby-banner");
+    if (!banner) return;
+    var show = !!shouldShow && !nearbyBannerDismissed;
+    banner.classList.toggle("show", show);
+    if (show) positionNearbyBanner();
   }
 
   function showCard() {
@@ -1871,6 +1960,7 @@
     }
     setPanel("rlb-mat", String(matched));
     refreshCardCount(); // keep the card count in sync across pagination / re-scores
+    updateNearbyBanner(hideOthers);
   }
 
   // ── auto-refresh off ───────────────────────────────────────────────────────────
