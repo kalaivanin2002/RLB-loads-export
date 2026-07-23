@@ -82,14 +82,18 @@
       "[data-rlb-lead]::before{content:'EARLY';position:absolute;left:var(--rlb-early-left,8px);top:var(--rlb-early-top,8px);z-index:6;background:#b91c1c;color:#fff;font:700 10px/1 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;padding:4px 6px;border-radius:4px;letter-spacing:.04em;box-shadow:0 1px 2px rgba(0,0,0,.3);pointer-events:none;white-space:nowrap;}",
       // Solid near-black tooltip: no borders, no header underline, full-brightness
       // white text on every row (no dimming/opacity). Keeps the tabular columns.
-      "#rlb-tip{position:fixed;z-index:2147483647;max-width:360px;background:#0b0f19;color:#ffffff;font:12px/1.3 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:none;display:none;}",
+      "#rlb-tip{position:fixed;z-index:2147483647;max-width:360px;background:#0b0f19!important;color:#ffffff;font:12px/1.3 'Amazon Ember',-apple-system,Segoe UI,Roboto,sans-serif;border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px rgba(0,0,0,.5);pointer-events:none;display:none;}",
+      "#rlb-tip *{background:transparent!important;background-color:transparent!important;box-shadow:none!important;}",
       "#rlb-tip .h{font-weight:700;margin-bottom:4px;color:#fff;}",
       // !important on the border/background resets: Relay's own page styles can leak
       // into our injected table (default cell borders, alternating-row backgrounds)
       // if their stylesheet loads/wins after ours — these overrides keep the tooltip
-      // a flat borderless dark panel regardless of load order.
-      "#rlb-tip table{width:100%;border-collapse:collapse;border:none!important;box-shadow:none!important;background:transparent!important;}",
-      "#rlb-tip td{padding:2px 6px 2px 0;white-space:nowrap;border:none!important;background:transparent!important;color:#ffffff;font-size:11px;}",
+      // a flat borderless dark panel regardless of load order. The "* transparent"
+      // rule above covers tr/tbody/thead too (Relay sets white row backgrounds there,
+      // which my table/td/th-only rules missed — that was the white-panel bug).
+      "#rlb-tip table,#rlb-tip thead,#rlb-tip tbody,#rlb-tip tr{border:none!important;}",
+      "#rlb-tip table{width:100%;border-collapse:collapse;}",
+      "#rlb-tip td{padding:2px 6px 2px 0;white-space:nowrap;border:none!important;color:#ffffff;font-size:11px;}",
       // Driver name truncates (single line + ellipsis) so a long name keeps the row a
       // uniform height and the tooltip narrow; full name still shows on hover.
       "#rlb-tip .rlb-dname{display:inline-block;max-width:108px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;}",
@@ -253,44 +257,10 @@
     //   }
     // });
 
-    // "Only my driver locations" filter — when checked, hide every load card that
-    // isn't matched to one of your drivers. Reflects the persisted `onlyMyDrivers`
-    // JS state (which survives SPA navigation) so it stays in sync if the panel is
-    // rebuilt after a route change.
-    var only = document.createElement("label");
-    only.id = "rlb-only-mine";
-    only.title = "Hide loads that don't match any of your drivers.";
-    only.innerHTML = '<span class="rlb-switch"><input id="rlb-only-mine-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Only my driver locations</span>';
-    document.body.appendChild(only);
-    var onlyCb = only.querySelector("#rlb-only-mine-cb");
-    onlyCb.checked = onlyMyDrivers;
-    onlyCb.addEventListener("change", function () {
-      onlyMyDrivers = onlyCb.checked;
-      try { chrome.storage.local.set({ onlyMyDrivers: onlyMyDrivers }); } catch (e) { /* context invalidated */ }
-      schedulePaint();
-    });
-
-    // "Refresh" toggle = the on-page Auto Refresh switch. Its checked state mirrors
-    // arEnabled (set by reflectAutoRefreshToggle); clicking it writes arEnabled to
-    // storage, which the storage.onChanged listener turns into start/stop. Placed
-    // by positionOnlyMine; the countdown chip sits beside it.
-    var fy = document.createElement("label");
-    fy.id = "rlb-fleetyes-refresh";
-    fy.title = "Auto refresh — refresh the board on a randomized timer";
-    fy.innerHTML = '<span class="rlb-switch"><input id="rlb-fleetyes-refresh-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Auto Refresh</span>';
-    document.body.appendChild(fy);
-    var fyCb = fy.querySelector("#rlb-fleetyes-refresh-cb");
-    fyCb.checked = arEnabled;
-    fyCb.addEventListener("change", function () {
-      try { chrome.storage.local.set({ arEnabled: !!fyCb.checked }); } catch (e) { /* context invalidated */ }
-    });
-
-    // Countdown chip: remaining seconds until the next auto-refresh, shown beside
-    // the Refresh toggle. Text + visibility driven by the auto-refresh tick logic.
-    var arCd = document.createElement("span");
-    arCd.id = "rlb-ar-countdown";
-    arCd.title = "Time until the next automatic refresh";
-    document.body.appendChild(arCd);
+    // NOTE: the "Only my driver locations" + "Auto Refresh" toggles (and the
+    // countdown chip) are NOT created here — they're injected by ensureToggles()
+    // only AFTER the first ⚡ search completes (see showRoundResult), since they
+    // only make sense once there are scored loads on the board.
 
     var card = document.createElement("div");
     card.id = "rlb-card";
@@ -307,13 +277,58 @@
     positionLauncher();
     window.addEventListener("scroll", positionLauncher, true);
     window.addEventListener("resize", positionLauncher);
+  }
 
-    // The "Only my driver locations" toggle is a fixed control next to the refresh
-    // button at the bottom; the footer is viewport-fixed, so track resize (not
-    // scroll). Retry once shortly after load — the utility bar renders after us.
+  // Inject the bottom-bar toggles — "Only my driver locations", "Auto Refresh",
+  // and the countdown chip — ONCE, only after the first ⚡ search has completed
+  // (called from showRoundResult). Before a search there are no scored loads, so
+  // these controls have nothing to act on. Auto-refresh starts ON at this point.
+  function ensureToggles() {
+    if (!onLoadboard()) return;
+    if (document.getElementById("rlb-only-mine")) return; // already injected
+
+    // "Only my driver locations" filter — when checked, hide every load card that
+    // isn't matched to one of your drivers.
+    var only = document.createElement("label");
+    only.id = "rlb-only-mine";
+    only.title = "Hide loads that don't match any of your drivers.";
+    only.innerHTML = '<span class="rlb-switch"><input id="rlb-only-mine-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Only my driver locations</span>';
+    document.body.appendChild(only);
+    var onlyCb = only.querySelector("#rlb-only-mine-cb");
+    onlyCb.checked = onlyMyDrivers;
+    onlyCb.addEventListener("change", function () {
+      onlyMyDrivers = onlyCb.checked;
+      try { chrome.storage.local.set({ onlyMyDrivers: onlyMyDrivers }); } catch (e) { /* context invalidated */ }
+      schedulePaint();
+    });
+
+    // "Auto Refresh" switch. Its checked state mirrors arEnabled; clicking it writes
+    // arEnabled to storage, which the storage.onChanged listener turns into start/stop.
+    var fy = document.createElement("label");
+    fy.id = "rlb-fleetyes-refresh";
+    fy.title = "Auto refresh — refresh the board on a randomized timer";
+    fy.innerHTML = '<span class="rlb-switch"><input id="rlb-fleetyes-refresh-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Auto Refresh</span>';
+    document.body.appendChild(fy);
+    var fyCb = fy.querySelector("#rlb-fleetyes-refresh-cb");
+    fyCb.checked = arEnabled;
+    fyCb.addEventListener("change", function () {
+      try { chrome.storage.local.set({ arEnabled: !!fyCb.checked }); } catch (e) { /* context invalidated */ }
+    });
+
+    // Countdown chip: remaining seconds until the next auto-refresh.
+    var arCd = document.createElement("span");
+    arCd.id = "rlb-ar-countdown";
+    arCd.title = "Time until the next automatic refresh";
+    document.body.appendChild(arCd);
+
+    // The toggles are a fixed control row next to the utility bar; the footer is
+    // viewport-fixed, so track resize (not scroll).
     positionOnlyMine();
     window.addEventListener("resize", positionOnlyMine);
     window.setTimeout(positionOnlyMine, 1200);
+
+    // Now that the toggle exists, turn auto-refresh ON (starts the timer + UI).
+    startAutoRefreshAfterSearch();
   }
 
   // Anchor the floating launcher to the search panel's top-right so it reads as
@@ -1582,6 +1597,9 @@
   }
 
   function showRoundResult(cities) {
+    // The search is done — inject the bottom-bar toggles now (Only my drivers +
+    // Auto Refresh), which also turns auto-refresh ON. No-op after the first time.
+    ensureToggles();
     var n = countHighlighted();
     var roundLabel = batches.length > 1 ? ("Location " + (roundIdx + 1) + " of " + batches.length + " · ") : "";
     setCard(
@@ -2091,28 +2109,41 @@
   }
 
   // Apply auto-refresh config (from storage): clamp, validate, and (re)start/stop.
+  // Guarded so it never starts before the toggle exists — auto-refresh only runs
+  // after the first ⚡ search (see ensureToggles / startAutoRefreshAfterSearch).
   function applyAutoRefreshConfig(r) {
     if (typeof r.arMin === "number") arMin = Math.min(Math.max(r.arMin, AR_MIN_S), AR_MAX_S);
     if (typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
+    var togglesReady = !!document.getElementById("rlb-fleetyes-refresh");
+    if (!togglesReady) return; // no toggle yet → don't run auto-refresh before a search
     arEnabled = !!r.arEnabled && autoRefreshRangeValid();
     reflectAutoRefreshToggle();
     if (arEnabled) startAutoRefresh(); else stopAutoRefresh();
     positionOnlyMine(); // reposition AFTER the countdown has its text (stable width)
   }
 
-  // Read the interval config from storage on boot. Auto-refresh always starts ON
-  // on a fresh page load — a mid-session interaction turns it off (and persists
-  // arEnabled:false), but reloading the board is a deliberate "start watching
-  // again" signal, so we force it back ON here and re-persist true.
+  // Load ONLY the interval bounds (arMin/arMax) from storage on boot. Auto-refresh
+  // does NOT start here — it starts when the toggle is injected after the first ⚡
+  // search (startAutoRefreshAfterSearch), since there's nothing to refresh before
+  // a search has run.
   function loadAutoRefreshPrefs() {
     try {
       chrome.storage.local.get(["arMin", "arMax"], function (r) {
-        var cfg = r || {};
-        cfg.arEnabled = true; // always ON on page load, regardless of stored state
-        applyAutoRefreshConfig(cfg);
-        try { chrome.storage.local.set({ arEnabled: true }); } catch (e) { /* context invalidated */ }
+        if (r && typeof r.arMin === "number") arMin = Math.min(Math.max(r.arMin, AR_MIN_S), AR_MAX_S);
+        if (r && typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
       });
     } catch (e) { /* context invalidated */ }
+  }
+
+  // Turn auto-refresh ON after a search completes — always ON at this point (a
+  // prior interaction may have persisted arEnabled:false, but a fresh search is a
+  // deliberate "start watching" signal). Re-persists true so state stays in sync.
+  function startAutoRefreshAfterSearch() {
+    arEnabled = true;
+    reflectAutoRefreshToggle();
+    if (autoRefreshRangeValid()) startAutoRefresh();
+    positionOnlyMine();
+    try { chrome.storage.local.set({ arEnabled: true }); } catch (e) { /* context invalidated */ }
   }
 
   // React live to popup changes: when the user saves new auto-refresh settings,
