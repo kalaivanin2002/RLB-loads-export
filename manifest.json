@@ -7,19 +7,39 @@
     "default_popup": "popup.html",
     "default_title": "RLB Load Search"
   },
-  "permissions": ["scripting", "tabs", "storage", "webRequest"],
+  "permissions": ["scripting", "tabs", "storage", "unlimitedStorage", "alarms", "windows"],
   "host_permissions": [
     "https://relay.amazon.co.uk/*",
     "https://relay.amazon.com/*",
-    "https://ontrack-api.agilecyber.com/*"
+    "https://ontrack-api.agilecyber.com/*",
+    "https://afp-api.fleetyes.com/*",
+    "https://rsp-api.fleetyes.com/*",
+    "https://nominatim.openstreetmap.org/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
-  "web_accessible_resources": [
+  "content_scripts": [
     {
-      "resources": ["drivers.json"],
-      "matches": ["<all_urls>"]
+      "matches": ["https://relay.amazon.co.uk/*", "https://relay.amazon.com/*"],
+      "js": ["hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://relay.amazon.co.uk/*", "https://relay.amazon.com/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://relay.amazon.co.uk/*", "https://relay.amazon.com/*"],
+      "js": ["loadboard.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
     }
-  ]
+  ],
+  "web_accessible_resources": []
 }
