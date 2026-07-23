@@ -257,10 +257,44 @@
     //   }
     // });
 
-    // NOTE: the "Only my driver locations" + "Auto Refresh" toggles (and the
-    // countdown chip) are NOT created here — they're injected by ensureToggles()
-    // only AFTER the first ⚡ search completes (see showRoundResult), since they
-    // only make sense once there are scored loads on the board.
+    // "Only my driver locations" filter — when checked, hide every load card that
+    // isn't matched to one of your drivers. Reflects the persisted `onlyMyDrivers`
+    // JS state (which survives SPA navigation) so it stays in sync if the panel is
+    // rebuilt after a route change.
+    var only = document.createElement("label");
+    only.id = "rlb-only-mine";
+    only.title = "Hide loads that don't match any of your drivers.";
+    only.innerHTML = '<span class="rlb-switch"><input id="rlb-only-mine-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Only my driver locations</span>';
+    document.body.appendChild(only);
+    var onlyCb = only.querySelector("#rlb-only-mine-cb");
+    onlyCb.checked = onlyMyDrivers;
+    onlyCb.addEventListener("change", function () {
+      onlyMyDrivers = onlyCb.checked;
+      try { chrome.storage.local.set({ onlyMyDrivers: onlyMyDrivers }); } catch (e) { /* context invalidated */ }
+      schedulePaint();
+    });
+
+    // "Refresh" toggle = the on-page Auto Refresh switch. Its checked state mirrors
+    // arEnabled (set by reflectAutoRefreshToggle); clicking it writes arEnabled to
+    // storage, which the storage.onChanged listener turns into start/stop. Placed
+    // by positionOnlyMine; the countdown chip sits beside it.
+    var fy = document.createElement("label");
+    fy.id = "rlb-fleetyes-refresh";
+    fy.title = "Auto refresh — refresh the board on a randomized timer";
+    fy.innerHTML = '<span class="rlb-switch"><input id="rlb-fleetyes-refresh-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Auto Refresh</span>';
+    document.body.appendChild(fy);
+    var fyCb = fy.querySelector("#rlb-fleetyes-refresh-cb");
+    fyCb.checked = arEnabled;
+    fyCb.addEventListener("change", function () {
+      try { chrome.storage.local.set({ arEnabled: !!fyCb.checked }); } catch (e) { /* context invalidated */ }
+    });
+
+    // Countdown chip: remaining seconds until the next auto-refresh, shown beside
+    // the Refresh toggle. Text + visibility driven by the auto-refresh tick logic.
+    var arCd = document.createElement("span");
+    arCd.id = "rlb-ar-countdown";
+    arCd.title = "Time until the next automatic refresh";
+    document.body.appendChild(arCd);
 
     var card = document.createElement("div");
     card.id = "rlb-card";
@@ -277,58 +311,13 @@
     positionLauncher();
     window.addEventListener("scroll", positionLauncher, true);
     window.addEventListener("resize", positionLauncher);
-  }
 
-  // Inject the bottom-bar toggles — "Only my driver locations", "Auto Refresh",
-  // and the countdown chip — ONCE, only after the first ⚡ search has completed
-  // (called from showRoundResult). Before a search there are no scored loads, so
-  // these controls have nothing to act on. Auto-refresh starts ON at this point.
-  function ensureToggles() {
-    if (!onLoadboard()) return;
-    if (document.getElementById("rlb-only-mine")) return; // already injected
-
-    // "Only my driver locations" filter — when checked, hide every load card that
-    // isn't matched to one of your drivers.
-    var only = document.createElement("label");
-    only.id = "rlb-only-mine";
-    only.title = "Hide loads that don't match any of your drivers.";
-    only.innerHTML = '<span class="rlb-switch"><input id="rlb-only-mine-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Only my driver locations</span>';
-    document.body.appendChild(only);
-    var onlyCb = only.querySelector("#rlb-only-mine-cb");
-    onlyCb.checked = onlyMyDrivers;
-    onlyCb.addEventListener("change", function () {
-      onlyMyDrivers = onlyCb.checked;
-      try { chrome.storage.local.set({ onlyMyDrivers: onlyMyDrivers }); } catch (e) { /* context invalidated */ }
-      schedulePaint();
-    });
-
-    // "Auto Refresh" switch. Its checked state mirrors arEnabled; clicking it writes
-    // arEnabled to storage, which the storage.onChanged listener turns into start/stop.
-    var fy = document.createElement("label");
-    fy.id = "rlb-fleetyes-refresh";
-    fy.title = "Auto refresh — refresh the board on a randomized timer";
-    fy.innerHTML = '<span class="rlb-switch"><input id="rlb-fleetyes-refresh-cb" type="checkbox" /><span class="rlb-slider"></span></span><span>Auto Refresh</span>';
-    document.body.appendChild(fy);
-    var fyCb = fy.querySelector("#rlb-fleetyes-refresh-cb");
-    fyCb.checked = arEnabled;
-    fyCb.addEventListener("change", function () {
-      try { chrome.storage.local.set({ arEnabled: !!fyCb.checked }); } catch (e) { /* context invalidated */ }
-    });
-
-    // Countdown chip: remaining seconds until the next auto-refresh.
-    var arCd = document.createElement("span");
-    arCd.id = "rlb-ar-countdown";
-    arCd.title = "Time until the next automatic refresh";
-    document.body.appendChild(arCd);
-
-    // The toggles are a fixed control row next to the utility bar; the footer is
-    // viewport-fixed, so track resize (not scroll).
+    // The "Only my driver locations" toggle is a fixed control next to the refresh
+    // button at the bottom; the footer is viewport-fixed, so track resize (not
+    // scroll). Retry once shortly after load — the utility bar renders after us.
     positionOnlyMine();
     window.addEventListener("resize", positionOnlyMine);
     window.setTimeout(positionOnlyMine, 1200);
-
-    // Now that the toggle exists, turn auto-refresh ON (starts the timer + UI).
-    startAutoRefreshAfterSearch();
   }
 
   // Anchor the floating launcher to the search panel's top-right so it reads as
@@ -1597,9 +1586,6 @@
   }
 
   function showRoundResult(cities) {
-    // The search is done — inject the bottom-bar toggles now (Only my drivers +
-    // Auto Refresh), which also turns auto-refresh ON. No-op after the first time.
-    ensureToggles();
     var n = countHighlighted();
     var roundLabel = batches.length > 1 ? ("Location " + (roundIdx + 1) + " of " + batches.length + " · ") : "";
     setCard(
@@ -2109,41 +2095,22 @@
   }
 
   // Apply auto-refresh config (from storage): clamp, validate, and (re)start/stop.
-  // Guarded so it never starts before the toggle exists — auto-refresh only runs
-  // after the first ⚡ search (see ensureToggles / startAutoRefreshAfterSearch).
   function applyAutoRefreshConfig(r) {
     if (typeof r.arMin === "number") arMin = Math.min(Math.max(r.arMin, AR_MIN_S), AR_MAX_S);
     if (typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
-    var togglesReady = !!document.getElementById("rlb-fleetyes-refresh");
-    if (!togglesReady) return; // no toggle yet → don't run auto-refresh before a search
     arEnabled = !!r.arEnabled && autoRefreshRangeValid();
     reflectAutoRefreshToggle();
     if (arEnabled) startAutoRefresh(); else stopAutoRefresh();
     positionOnlyMine(); // reposition AFTER the countdown has its text (stable width)
   }
 
-  // Load ONLY the interval bounds (arMin/arMax) from storage on boot. Auto-refresh
-  // does NOT start here — it starts when the toggle is injected after the first ⚡
-  // search (startAutoRefreshAfterSearch), since there's nothing to refresh before
-  // a search has run.
+  // Read the popup-managed config from storage on boot, then start if enabled.
   function loadAutoRefreshPrefs() {
     try {
-      chrome.storage.local.get(["arMin", "arMax"], function (r) {
-        if (r && typeof r.arMin === "number") arMin = Math.min(Math.max(r.arMin, AR_MIN_S), AR_MAX_S);
-        if (r && typeof r.arMax === "number") arMax = Math.min(Math.max(r.arMax, AR_MIN_S), AR_MAX_S);
+      chrome.storage.local.get(["arEnabled", "arMin", "arMax"], function (r) {
+        applyAutoRefreshConfig(r || {});
       });
     } catch (e) { /* context invalidated */ }
-  }
-
-  // Turn auto-refresh ON after a search completes — always ON at this point (a
-  // prior interaction may have persisted arEnabled:false, but a fresh search is a
-  // deliberate "start watching" signal). Re-persists true so state stays in sync.
-  function startAutoRefreshAfterSearch() {
-    arEnabled = true;
-    reflectAutoRefreshToggle();
-    if (autoRefreshRangeValid()) startAutoRefresh();
-    positionOnlyMine();
-    try { chrome.storage.local.set({ arEnabled: true }); } catch (e) { /* context invalidated */ }
   }
 
   // React live to popup changes: when the user saves new auto-refresh settings,
