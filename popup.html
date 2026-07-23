@@ -7,14 +7,21 @@
 </head>
 <body>
   <div class="container">
-    <h1 class="title">RLB</h1>
+    <div class="app-head">
+      <h1 class="title">RLB</h1>
+    </div>
 
-    <div id="driverList" class="driver-list"></div>
-
-    <button id="searchLoadsBtn" class="btn-primary">Search Loads</button>
-
-    <p id="status" class="status"></p>
+    <p class="field-hint" style="margin: 0 0 10px;">
+      All settings — search location, planning rules, auto-refresh and scoring —
+      are managed in <strong>FleetYes → Settings → RLB Settings</strong> and synced
+      into this extension automatically for your carrier each time you run a search.
+    </p>
+    <p class="field-hint" style="margin: 0;">
+      Nothing to configure here. Open the Amazon Relay Load Board and click
+      <strong>⚡ Find my best loads</strong>.
+    </p>
   </div>
+
   <script src="popup.js"></script>
 </body>
 </html>
