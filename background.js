@@ -1480,10 +1480,11 @@ async function fetchInitToken(cfg, carrierCode) {
   return key;
 }
 
-// Make sure cfg.token is populated for this carrier, fetching+caching one via
-// /api/v1/init when missing. Mutates cfg.token in place and persists it, so
-// every downstream call (rlb-settings, active-driver-shifts, approved-places)
-// keeps reading cfg.token exactly as before.
+// Make sure cfg.token is populated, fetching+caching one via /api/v1/init when
+// missing. Mutates cfg.token in place and persists it, so every downstream call
+// (rlb-settings, active-driver-shifts, approved-places) keeps reading cfg.token
+// exactly as before. refreshAvailabilityOnly clears cfg.token before each
+// "Find my best loads" run, so this always re-inits on that path.
 async function ensureToken(cfg, carrierCode) {
   if (cfg.token) return cfg.token;
   if (!carrierCode) {
@@ -2496,6 +2497,12 @@ async function refreshAvailabilityOnly(carrierCode) {
   cfg.carrierCode = (carrierCode || "").trim();
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
+
+  // Force a fresh /api/v1/init on every "Find my best loads" click, rather than
+  // reusing a cached token — guarantees the schedule-api call always uses a
+  // token minted for whichever ontrackUrl is currently configured.
+  cfg.token = "";
+  await chrome.storage.local.set({ token: "" });
 
   // Primary: shifts API (active-driver-shifts). A Relay tab is still needed to
   // resolve any missing home city to coordinates via the cities endpoint.
