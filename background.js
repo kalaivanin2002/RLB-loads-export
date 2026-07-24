@@ -2497,18 +2497,10 @@ async function refreshAvailabilityOnly(carrierCode) {
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
 
-  // ── TEMPORARY: schedule API (active-driver-shifts) is the MAIN flow, but it's
-  // held for now. The Relay-trips flow (formerly the fallback) is being used as
-  // the main flow. Source is "relay-trips-main" (NOT "…-fallback") so the on-page
-  // "shifts unavailable" banner stays hidden — this is intentional, not a failure.
-  // To restore the schedule API as primary, uncomment the block below and remove
-  // the direct Relay-trips call that follows it.
-  let availability, source = "relay-trips-main", apiError = null;
-  /*
   // Primary: shifts API (active-driver-shifts). A Relay tab is still needed to
   // resolve any missing home city to coordinates via the cities endpoint.
   // Fallback: the original Relay-trips availability when the API fails.
-  source = "schedule-api";
+  let availability, source = "schedule-api", apiError = null;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
     console.log("[RLB availability] ✓ shifts API OK — " + availability.length + " driver(s) via schedule-api.");
@@ -2532,17 +2524,6 @@ async function refreshAvailabilityOnly(carrierCode) {
       await logError("background/refreshAvailabilityOnly/fallback", e2);
       return { ok: false, error: "Shifts API failed (" + apiError + ") and Relay-trips fallback also failed: " + ((e2 && e2.message) || e2) };
     }
-  }
-  */
-
-  // Relay-trips flow used directly as the main flow (schedule API held).
-  try {
-    availability = await buildRelayTripsAvailability(tab, cfg);
-  } catch (e) {
-    await logError("background/refreshAvailabilityOnly/relayTrips", e);
-    // Config errors (e.g. no Search Location from rlb-settings) surface as config.
-    if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
-    return { ok: false, error: (e && e.message) || String(e) };
   }
   console.log("[RLB availability] source=" + source + ", " + availability.length + " driver(s). JSON:", JSON.stringify(availability, null, 2));
   await chrome.storage.local.set({
