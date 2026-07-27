@@ -1521,6 +1521,12 @@ async function fetchRlbSettings(cfg, carrierCode) {
 // Returns { ok, applied } where `applied` is the count of keys written.
 async function syncRlbSettings(carrierCode) {
   const cfg = await getConfig();
+  // Force a fresh /api/v1/init before rlb-settings — this runs first in the
+  // "Find my best loads" flow (ensureDrivers → syncSettingsAsync, THEN
+  // refreshDriversAsync), so it can't rely on refreshAvailabilityOnly's own
+  // token clear, which happens too late to help this call.
+  cfg.token = "";
+  await chrome.storage.local.set({ token: "" });
   const data = await fetchRlbSettings(cfg, carrierCode);
   const planning = (data && data.planningRules)     || {};
   const developer = (data && data.developerSettings) || {};
