@@ -21,8 +21,12 @@ const DEFAULTS = {
   // Bare host base. Each endpoint appends its own path: shifts → /api/v1/…,
   // rlb-settings → /v1/… (see activeDriverShiftsUrl / rlbSettingsUrl).
   ontrackUrl: "https://afp-api.fleetyes.com",
+  // RSP carriers (isAFPCarrier meta on the Relay page === "false") hit this host
+  // instead — see resolveOntrackUrl / refreshAvailabilityOnly etc.
+  rspUrl: "https://rsp-api.fleetyes.com",
   ingestUrl: "",
   token: "",
+  tokenHost: "", // origin the cached token was minted for — see ensureToken
   carrierCode: "", // e.g. "AMRTL" — used for the FleetYes approved-places lookup
   useFleetyesPlaces: false, // ON → unassigned drivers searched from FleetYes approved places; OFF → Relay domicile
   letters: "abcdefghijklmnopqrstuvwxyz",
@@ -51,13 +55,57 @@ const DEFAULTS = {
   weightReposition: 20, // favours loads that finish near where the driver started
 };
 
+// Hosts that older builds of this extension persisted into storage back when the
+// popup still let you edit the OnTrack base URL. The popup is info-only now and
+// the AFP/RSP hosts come from DEFAULTS, but a stored value still wins in the
+// Object.assign below — so an upgraded install keeps calling the legacy host and
+// RSP carriers never reach rsp-api. Treat these as unset so DEFAULTS applies.
+const LEGACY_ONTRACK_HOSTS = ["ontrack-api.agilecyber.com"];
+
+function isLegacyOntrackUrl(v) {
+  if (!v) return false;
+  const raw = String(v).trim();
+  if (!raw) return false;
+  let host;
+  try { host = new URL(raw).hostname; }
+  catch (e) { host = raw.replace(/^https?:\/\//i, "").split("/")[0]; }
+  return LEGACY_ONTRACK_HOSTS.indexOf(host.toLowerCase()) !== -1;
+}
+
 function getConfig() {
   return new Promise((resolve) => {
     chrome.storage.local.get(Object.keys(DEFAULTS), (r) => {
-      resolve(Object.assign({}, DEFAULTS, r || {}));
+      const stored = Object.assign({}, r || {});
+      // A blank or legacy ontrackUrl/rspUrl must fall through to DEFAULTS rather
+      // than override it (Object.assign only skips `undefined`, not "" or stale).
+      if (!stored.ontrackUrl || isLegacyOntrackUrl(stored.ontrackUrl)) delete stored.ontrackUrl;
+      if (!stored.rspUrl || isLegacyOntrackUrl(stored.rspUrl)) delete stored.rspUrl;
+      resolve(Object.assign({}, DEFAULTS, stored));
     });
   });
 }
+
+// Scrub the legacy host out of storage once, so it stops shadowing DEFAULTS and
+// no longer shows up in the popup/debug views. getConfig already ignores it at
+// read time — this just stops the dead value being carried around forever. Any
+// cached Bearer token minted against that host is dropped with it, since a token
+// is only valid for the origin it was issued by (see ensureToken).
+(function migrateLegacyOntrackUrl() {
+  try {
+    chrome.storage.local.get(["ontrackUrl", "rspUrl", "token", "tokenHost"], (r) => {
+      if (chrome.runtime.lastError || !r) return;
+      const patch = {};
+      if (isLegacyOntrackUrl(r.ontrackUrl)) patch.ontrackUrl = DEFAULTS.ontrackUrl;
+      if (isLegacyOntrackUrl(r.rspUrl)) patch.rspUrl = DEFAULTS.rspUrl;
+      if (isLegacyOntrackUrl(r.tokenHost)) { patch.token = ""; patch.tokenHost = ""; }
+      if (Object.keys(patch).length) {
+        chrome.storage.local.set(patch, () => {
+          console.log("[RLB] migrated legacy ontrackUrl out of storage:", Object.keys(patch).join(", "));
+        });
+      }
+    });
+  } catch (e) { /* worker torn down mid-migration — retried on next startup */ }
+})();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
@@ -1414,6 +1462,15 @@ function buildAvailability(entities, cfg) {
 // The OnTrack base URL is now a bare host (https://afp-api.fleetyes.com/).
 // Each endpoint appends its own path prefix onto the scheme+host origin, so a
 // stray path on the setting (e.g. a legacy …/api/v1) never doubles up.
+// AFP vs RSP: Relay's page carries a meta tag (isAFPCarrier === "true"/"false")
+// that loadboard.js reads and passes through as carrierType ("afp"/"rsp"/null).
+// "afp" and null (tag missing/carrier type unknown) both use the default
+// ontrackUrl — null falling through here means the existing init rejection
+// (fetchInitToken) surfaces the "not registered" error exactly as before.
+function resolveOntrackUrl(cfg, carrierType) {
+  console.log("[RLB] resolveOntrackUrl: carrierType=" + carrierType + ", cfg.ontrackUrl=" + cfg.ontrackUrl + ", cfg.rspUrl=" + cfg.rspUrl);
+  return carrierType === "rsp" ? cfg.rspUrl : cfg.ontrackUrl;
+}
 function ontrackOrigin(cfg) {
   const raw = (cfg.ontrackUrl || "").replace(/\/+$/, "");
   try { return new URL(raw).origin; }                    // scheme + host only
@@ -1475,6 +1532,12 @@ async function fetchInitToken(cfg, carrierCode) {
   const text = await res.text();
   if (!res.ok) {
     const err = new Error("init HTTP " + res.status + ": " + text.slice(0, 200));
+    // FleetYes returns this specific 404 when the carrier has no FleetYes
+    // account at all — flag it so the UI can show a plain "you're not
+    // registered" message instead of the generic technical failure text.
+    if (res.status === 404 && /company not found for carrier/i.test(text)) {
+      err.notRegistered = true;
+    }
     await logError("background/fetchInitToken", err, { url: url, status: res.status });
     throw err;
   }
@@ -1491,7 +1554,11 @@ async function fetchInitToken(cfg, carrierCode) {
 // exactly as before. refreshAvailabilityOnly clears cfg.token before each
 // "Find my best loads" run, so this always re-inits on that path.
 async function ensureToken(cfg, carrierCode) {
-  if (cfg.token) return cfg.token;
+  const host = ontrackOrigin(cfg);
+  // A token minted for one host (AFP) must never be reused against the other
+  // (RSP) — only trust the cache when it was minted for the host we're about
+  // to call.
+  if (cfg.token && cfg.tokenHost === host) return cfg.token;
   if (!carrierCode) {
     const err = new Error("Carrier code not found on the Relay page — open a Relay Load Board page and try again.");
     err.config = true;
@@ -1499,7 +1566,8 @@ async function ensureToken(cfg, carrierCode) {
   }
   const key = await fetchInitToken(cfg, carrierCode);
   cfg.token = key;
-  await chrome.storage.local.set({ token: key });
+  cfg.tokenHost = host;
+  await chrome.storage.local.set({ token: key, tokenHost: host });
   return key;
 }
 
@@ -1525,8 +1593,9 @@ async function fetchRlbSettings(cfg, carrierCode) {
 
 // GET the server settings for this carrier and merge them into storage.
 // Returns { ok, applied } where `applied` is the count of keys written.
-async function syncRlbSettings(carrierCode) {
+async function syncRlbSettings(carrierCode, carrierType) {
   const cfg = await getConfig();
+  cfg.ontrackUrl = resolveOntrackUrl(cfg, carrierType);
   const data = await fetchRlbSettings(cfg, carrierCode);
   const planning = (data && data.planningRules)     || {};
   const developer = (data && data.developerSettings) || {};
@@ -2517,12 +2586,14 @@ async function buildRelayUnassignedAvailability(tab, cfg) {
   return unassigned;
 }
 
-async function refreshAvailabilityOnly(carrierCode) {
+async function refreshAvailabilityOnly(carrierCode, carrierType) {
   const cfg = await getConfig();
   // Carrier code comes from Relay's page (#case-carrier-scac), passed in by the
   // content script — NOT the popup. Inject it into cfg so every downstream call
   // (shifts API, approved-places) reads cfg.carrierCode as before.
   cfg.carrierCode = (carrierCode || "").trim();
+  // AFP vs RSP host — see resolveOntrackUrl.
+  cfg.ontrackUrl = resolveOntrackUrl(cfg, carrierType);
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
 
@@ -2539,7 +2610,7 @@ async function refreshAvailabilityOnly(carrierCode) {
   // answer 200 with an empty shift list (carrier registered but nobody scheduled),
   // which is just as unusable as an error. Either way we fall back to Relay for the
   // driver list — while the search PLACE still comes from rlb-settings.
-  let availability, source = "schedule-api", apiError = null;
+  let availability, source = "schedule-api", apiError = null, notRegistered = false;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
     if (!availability.length) throw new Error("shifts API returned no drivers");
@@ -2549,6 +2620,7 @@ async function refreshAvailabilityOnly(carrierCode) {
     // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
     if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
     apiError = (e && e.message) || String(e);
+    notRegistered = !!(e && e.notRegistered);
     console.warn("[RLB availability] ✗ shifts API unusable (" + apiError + ") — falling back to Relay trips.");
     await log(
       "loads",
@@ -2562,7 +2634,11 @@ async function refreshAvailabilityOnly(carrierCode) {
       source = "relay-trips-fallback";
     } catch (e2) {
       await logError("background/refreshAvailabilityOnly/fallback", e2);
-      return { ok: false, error: "Shifts API failed (" + apiError + ") and Relay-trips fallback also failed: " + ((e2 && e2.message) || e2) };
+      return {
+        ok: false,
+        notRegistered: notRegistered,
+        error: "Shifts API failed (" + apiError + ") and Relay-trips fallback also failed: " + ((e2 && e2.message) || e2),
+      };
     }
   }
   console.log("[RLB availability] source=" + source + ", " + availability.length + " driver(s). JSON:", JSON.stringify(availability, null, 2));
@@ -2574,7 +2650,7 @@ async function refreshAvailabilityOnly(carrierCode) {
     // check can force a refresh when the user changes it (see ensureDrivers).
     plannerAvailabilitySearchLocation: (cfg.searchLocation || "").trim(),
   });
-  return { ok: true, count: availability.length, source: source, apiError: apiError };
+  return { ok: true, count: availability.length, source: source, apiError: apiError, notRegistered: notRegistered };
 }
 
 // Unassigned-drivers-ONLY refresh, for the dedicated "Find loads for
@@ -2585,9 +2661,10 @@ async function refreshAvailabilityOnly(carrierCode) {
 // each other's cached data, each can be reused/refreshed independently, and
 // scoring/highlighting driven by plannerAvailability is unaffected by this
 // flow running.
-async function refreshUnassignedDriversOnly(carrierCode) {
+async function refreshUnassignedDriversOnly(carrierCode, carrierType) {
   const cfg = await getConfig();
   cfg.carrierCode = (carrierCode || "").trim(); // from Relay's page, not the popup
+  cfg.ontrackUrl = resolveOntrackUrl(cfg, carrierType); // AFP vs RSP host — see resolveOntrackUrl
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
   // Primary: shifts API. Fallback: the original Relay unassigned-drivers flow.
@@ -2595,7 +2672,7 @@ async function refreshUnassignedDriversOnly(carrierCode) {
   // scoreLoadsForPage, which reads plannerAvailabilityUnassigned in "unassigned" mode).
   // As in refreshAvailabilityOnly: an empty driver list counts as a miss, so a 200
   // with no scheduled drivers falls back to Relay rather than caching nothing.
-  let availability, source = "schedule-api", apiError = null;
+  let availability, source = "schedule-api", apiError = null, notRegistered = false;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
     if (!availability.length) throw new Error("shifts API returned no drivers");
@@ -2605,6 +2682,7 @@ async function refreshUnassignedDriversOnly(carrierCode) {
     // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
     if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
     apiError = (e && e.message) || String(e);
+    notRegistered = !!(e && e.notRegistered);
     console.warn("[RLB availability] ✗ shifts API unusable (" + apiError + ") — falling back to Relay unassigned.");
     await log("loads", "No drivers from the FleetYes shifts API (" + apiError + ") — using Relay drivers, searched from the FleetYes Search Location.", "warn");
     try {
@@ -2612,7 +2690,11 @@ async function refreshUnassignedDriversOnly(carrierCode) {
       source = "relay-unassigned-fallback";
     } catch (e2) {
       await logError("background/refreshUnassignedDriversOnly/fallback", e2);
-      return { ok: false, error: "Shifts API failed (" + apiError + ") and Relay unassigned fallback also failed: " + ((e2 && e2.message) || e2) };
+      return {
+        ok: false,
+        notRegistered: notRegistered,
+        error: "Shifts API failed (" + apiError + ") and Relay unassigned fallback also failed: " + ((e2 && e2.message) || e2),
+      };
     }
   }
   console.log("[RLB availability] unassigned source=" + source + ", " + availability.length + " driver(s). JSON:", JSON.stringify(availability, null, 2));
@@ -2621,7 +2703,7 @@ async function refreshUnassignedDriversOnly(carrierCode) {
     plannerAvailabilityUnassignedAt: Date.now(),
     plannerAvailabilityUnassignedSource: source,
   });
-  return { ok: true, count: availability.length, source: source, apiError: apiError };
+  return { ok: true, count: availability.length, source: source, apiError: apiError, notRegistered: notRegistered };
 }
 
 // Score page-provided loads against stored availability → load-centric list
@@ -2679,7 +2761,7 @@ async function scoreLoadsForPage(loads, mode) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
   if (msg.type === "refresh-availability") {
-    refreshAvailabilityOnly(msg.carrierCode)
+    refreshAvailabilityOnly(msg.carrierCode, msg.carrierType)
       .then(sendResponse)
       .catch((e) => {
         logError("background/refresh-availability", e);
@@ -2697,7 +2779,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "refresh-unassigned-drivers") {
-    refreshUnassignedDriversOnly(msg.carrierCode)
+    refreshUnassignedDriversOnly(msg.carrierCode, msg.carrierType)
       .then(sendResponse)
       .catch((e) => {
         logError("background/refresh-unassigned-drivers", e);
@@ -2706,7 +2788,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "sync-rlb-settings") {
-    syncRlbSettings(msg.carrierCode)
+    syncRlbSettings(msg.carrierCode, msg.carrierType)
       .then(sendResponse)
       .catch((e) => {
         logError("background/sync-rlb-settings", e);
