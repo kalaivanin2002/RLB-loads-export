@@ -21,8 +21,12 @@ const DEFAULTS = {
   // Bare host base. Each endpoint appends its own path: shifts → /api/v1/…,
   // rlb-settings → /v1/… (see activeDriverShiftsUrl / rlbSettingsUrl).
   ontrackUrl: "https://afp-api.fleetyes.com",
+  // RSP carriers (isAFPCarrier meta on the Relay page === "false") hit this host
+  // instead — see resolveOntrackUrl / refreshAvailabilityOnly etc.
+  rspUrl: "https://rsp-api.fleetyes.com",
   ingestUrl: "",
   token: "",
+  tokenHost: "", // origin the cached token was minted for — see ensureToken
   carrierCode: "", // e.g. "AMRTL" — used for the FleetYes approved-places lookup
   useFleetyesPlaces: false, // ON → unassigned drivers searched from FleetYes approved places; OFF → Relay domicile
   letters: "abcdefghijklmnopqrstuvwxyz",
@@ -51,13 +55,57 @@ const DEFAULTS = {
   weightReposition: 20, // favours loads that finish near where the driver started
 };
 
+// Hosts that older builds of this extension persisted into storage back when the
+// popup still let you edit the OnTrack base URL. The popup is info-only now and
+// the AFP/RSP hosts come from DEFAULTS, but a stored value still wins in the
+// Object.assign below — so an upgraded install keeps calling the legacy host and
+// RSP carriers never reach rsp-api. Treat these as unset so DEFAULTS applies.
+const LEGACY_ONTRACK_HOSTS = ["ontrack-api.agilecyber.com"];
+
+function isLegacyOntrackUrl(v) {
+  if (!v) return false;
+  const raw = String(v).trim();
+  if (!raw) return false;
+  let host;
+  try { host = new URL(raw).hostname; }
+  catch (e) { host = raw.replace(/^https?:\/\//i, "").split("/")[0]; }
+  return LEGACY_ONTRACK_HOSTS.indexOf(host.toLowerCase()) !== -1;
+}
+
 function getConfig() {
   return new Promise((resolve) => {
     chrome.storage.local.get(Object.keys(DEFAULTS), (r) => {
-      resolve(Object.assign({}, DEFAULTS, r || {}));
+      const stored = Object.assign({}, r || {});
+      // A blank or legacy ontrackUrl/rspUrl must fall through to DEFAULTS rather
+      // than override it (Object.assign only skips `undefined`, not "" or stale).
+      if (!stored.ontrackUrl || isLegacyOntrackUrl(stored.ontrackUrl)) delete stored.ontrackUrl;
+      if (!stored.rspUrl || isLegacyOntrackUrl(stored.rspUrl)) delete stored.rspUrl;
+      resolve(Object.assign({}, DEFAULTS, stored));
     });
   });
 }
+
+// Scrub the legacy host out of storage once, so it stops shadowing DEFAULTS and
+// no longer shows up in the popup/debug views. getConfig already ignores it at
+// read time — this just stops the dead value being carried around forever. Any
+// cached Bearer token minted against that host is dropped with it, since a token
+// is only valid for the origin it was issued by (see ensureToken).
+(function migrateLegacyOntrackUrl() {
+  try {
+    chrome.storage.local.get(["ontrackUrl", "rspUrl", "token", "tokenHost"], (r) => {
+      if (chrome.runtime.lastError || !r) return;
+      const patch = {};
+      if (isLegacyOntrackUrl(r.ontrackUrl)) patch.ontrackUrl = DEFAULTS.ontrackUrl;
+      if (isLegacyOntrackUrl(r.rspUrl)) patch.rspUrl = DEFAULTS.rspUrl;
+      if (isLegacyOntrackUrl(r.tokenHost)) { patch.token = ""; patch.tokenHost = ""; }
+      if (Object.keys(patch).length) {
+        chrome.storage.local.set(patch, () => {
+          console.log("[RLB] migrated legacy ontrackUrl out of storage:", Object.keys(patch).join(", "));
+        });
+      }
+    });
+  } catch (e) { /* worker torn down mid-migration — retried on next startup */ }
+})();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
@@ -1385,6 +1433,11 @@ function buildAvailability(entities, cfg) {
       lastTripState: source ? source.state : null,
       lastTripEndTime: source ? new Date(source.end).toISOString() : null,
       freeLocation: freeLocation,
+      // The driver's real drop-off from the trip they came off. The search origin
+      // (freeLocation) gets overridden to the Search Location downstream, so keep the
+      // true drop-off here — it's shown in the drivers panel and is what deadhead /
+      // return / drive-time are measured from.
+      apiLocation: freeLocation,
       domicile: source ? source.domicile : null,
       equipment: source ? source.equipment : null,
       freeAt: effFreeStart > now ? new Date(effFreeStart).toISOString() : null,
@@ -1409,6 +1462,15 @@ function buildAvailability(entities, cfg) {
 // The OnTrack base URL is now a bare host (https://afp-api.fleetyes.com/).
 // Each endpoint appends its own path prefix onto the scheme+host origin, so a
 // stray path on the setting (e.g. a legacy …/api/v1) never doubles up.
+// AFP vs RSP: Relay's page carries a meta tag (isAFPCarrier === "true"/"false")
+// that loadboard.js reads and passes through as carrierType ("afp"/"rsp"/null).
+// "afp" and null (tag missing/carrier type unknown) both use the default
+// ontrackUrl — null falling through here means the existing init rejection
+// (fetchInitToken) surfaces the "not registered" error exactly as before.
+function resolveOntrackUrl(cfg, carrierType) {
+  console.log("[RLB] resolveOntrackUrl: carrierType=" + carrierType + ", cfg.ontrackUrl=" + cfg.ontrackUrl + ", cfg.rspUrl=" + cfg.rspUrl);
+  return carrierType === "rsp" ? cfg.rspUrl : cfg.ontrackUrl;
+}
 function ontrackOrigin(cfg) {
   const raw = (cfg.ontrackUrl || "").replace(/\/+$/, "");
   try { return new URL(raw).origin; }                    // scheme + host only
@@ -1470,6 +1532,12 @@ async function fetchInitToken(cfg, carrierCode) {
   const text = await res.text();
   if (!res.ok) {
     const err = new Error("init HTTP " + res.status + ": " + text.slice(0, 200));
+    // FleetYes returns this specific 404 when the carrier has no FleetYes
+    // account at all — flag it so the UI can show a plain "you're not
+    // registered" message instead of the generic technical failure text.
+    if (res.status === 404 && /company not found for carrier/i.test(text)) {
+      err.notRegistered = true;
+    }
     await logError("background/fetchInitToken", err, { url: url, status: res.status });
     throw err;
   }
@@ -1480,12 +1548,17 @@ async function fetchInitToken(cfg, carrierCode) {
   return key;
 }
 
-// Make sure cfg.token is populated for this carrier, fetching+caching one via
-// /api/v1/init when missing. Mutates cfg.token in place and persists it, so
-// every downstream call (rlb-settings, active-driver-shifts, approved-places)
-// keeps reading cfg.token exactly as before.
+// Make sure cfg.token is populated, fetching+caching one via /api/v1/init when
+// missing. Mutates cfg.token in place and persists it, so every downstream call
+// (rlb-settings, active-driver-shifts, approved-places) keeps reading cfg.token
+// exactly as before. refreshAvailabilityOnly clears cfg.token before each
+// "Find my best loads" run, so this always re-inits on that path.
 async function ensureToken(cfg, carrierCode) {
-  if (cfg.token) return cfg.token;
+  const host = ontrackOrigin(cfg);
+  // A token minted for one host (AFP) must never be reused against the other
+  // (RSP) — only trust the cache when it was minted for the host we're about
+  // to call.
+  if (cfg.token && cfg.tokenHost === host) return cfg.token;
   if (!carrierCode) {
     const err = new Error("Carrier code not found on the Relay page — open a Relay Load Board page and try again.");
     err.config = true;
@@ -1493,7 +1566,8 @@ async function ensureToken(cfg, carrierCode) {
   }
   const key = await fetchInitToken(cfg, carrierCode);
   cfg.token = key;
-  await chrome.storage.local.set({ token: key });
+  cfg.tokenHost = host;
+  await chrome.storage.local.set({ token: key, tokenHost: host });
   return key;
 }
 
@@ -1519,14 +1593,9 @@ async function fetchRlbSettings(cfg, carrierCode) {
 
 // GET the server settings for this carrier and merge them into storage.
 // Returns { ok, applied } where `applied` is the count of keys written.
-async function syncRlbSettings(carrierCode) {
+async function syncRlbSettings(carrierCode, carrierType) {
   const cfg = await getConfig();
-  // Force a fresh /api/v1/init before rlb-settings — this runs first in the
-  // "Find my best loads" flow (ensureDrivers → syncSettingsAsync, THEN
-  // refreshDriversAsync), so it can't rely on refreshAvailabilityOnly's own
-  // token clear, which happens too late to help this call.
-  cfg.token = "";
-  await chrome.storage.local.set({ token: "" });
+  cfg.ontrackUrl = resolveOntrackUrl(cfg, carrierType);
   const data = await fetchRlbSettings(cfg, carrierCode);
   const planning = (data && data.planningRules)     || {};
   const developer = (data && data.developerSettings) || {};
@@ -1687,7 +1756,8 @@ async function buildScheduleAvailability(tabId, cfg) {
     err.config = true;
     throw err;
   }
-  const freeLocation = { city: c.name, country: c.country || null, latitude: c.latitude, longitude: c.longitude };
+  // Origin of last resort: used for drivers whose shift row carries no end location.
+  const searchLocation = { city: c.name, country: c.country || null, latitude: c.latitude, longitude: c.longitude };
 
   // Then fetch the shifts (also throws config errors for missing carrier/token).
   const rows = await fetchDriverSchedule(cfg);
@@ -1701,7 +1771,7 @@ async function buildScheduleAvailability(tabId, cfg) {
     if (endMs == null) { noEnd++; continue; }
 
     // The driver's OWN end location (drop-off) from the API — shown in the drivers
-    // panel's "Free city" column. NOT used to search (that's freeLocation above).
+    // panel's "Free city" column. NOT used to search (that's freeLocation below).
     // City name is reverse-geocoded from lat/lng below if the API didn't supply one.
     const rowLoc = scheduleRowCoords(r);
     const apiLocation = rowLoc ? { city: rowLoc.city || null, latitude: rowLoc.latitude, longitude: rowLoc.longitude } : null;
@@ -1713,8 +1783,8 @@ async function buildScheduleAvailability(tabId, cfg) {
       lastTripId: null,
       lastTripState: null,
       lastTripEndTime: new Date(endMs).toISOString(),
-      freeLocation: freeLocation, // search FROM the configured Search Location
-      apiLocation: apiLocation,   // the driver's own location from the API (kept, unused for search)
+      freeLocation: searchLocation, // search FROM the configured Search Location
+      apiLocation: apiLocation,     // the driver's own drop-off — displayed, and what distances measure from
       domicile: null,
       equipment: null,
       freeAt: effFreeStart > now ? new Date(effFreeStart).toISOString() : null,
@@ -1801,7 +1871,14 @@ function planLoadsForDriver(avail, response, cfg) {
   if (effNext != null && effNext < upper) upper = effNext; // can't start after next commitment
   const wos = response && Array.isArray(response.workOpportunities) ? response.workOpportunities : [];
 
-  const fl = avail.freeLocation || {};
+  // Distances (deadhead, return, drive time) measure from where the driver ACTUALLY
+  // is — their own drop-off on apiLocation — not from freeLocation, which is the
+  // shared Search Location every driver is searched from. Using freeLocation here
+  // would give every driver the same deadhead. Falls back to freeLocation for
+  // drivers with no known drop-off (e.g. unassigned drivers with no domicile).
+  const fl = (avail.apiLocation && avail.apiLocation.latitude != null && avail.apiLocation.longitude != null)
+    ? avail.apiLocation
+    : (avail.freeLocation || {});
   const dropLat = fl.latitude != null ? fl.latitude : null;
   const dropLng = fl.longitude != null ? fl.longitude : null;
   const nearby = Number(cfg && cfg.nearbyRadius) || 10;
@@ -2352,6 +2429,11 @@ async function buildUnassignedDriverAvailability(tabId, cfg, allDrivers, assigne
     lastTripState: null,
     lastTripEndTime: null,
     freeLocation: { city: coords.name, country: coords.country || null, latitude: coords.latitude, longitude: coords.longitude },
+    // No trip → no real drop-off. The domicile stands in for it in the drivers panel;
+    // null coords simply render as "—". The search origin is overridden downstream.
+    apiLocation: coords.latitude != null && coords.longitude != null
+      ? { city: coords.name, latitude: coords.latitude, longitude: coords.longitude }
+      : null,
     domicile: domicileCode || null,
     equipment: null,
     freeAt: null,
@@ -2390,19 +2472,23 @@ async function buildUnassignedDriverAvailability(tabId, cfg, allDrivers, assigne
   }
 
   // ── OFF / fallback: each driver's Relay home domicile ──────────────────────────
-  let noDomicile = 0, unresolvedCity = 0;
+  // Unassigned drivers have no trip and therefore no drop-off. A driver with no
+  // domicile on file still gets a record: the search origin is overridden to the
+  // Search Location downstream anyway, so there's nothing to resolve here — their
+  // drop-off simply shows as unknown in the panel.
+  let viaDomicile = 0, noDomicile = 0;
   const out = [];
   for (const d of unassigned) {
     const dom = d.domiciles && d.domiciles[0];
     const cityName = dom && dom.domicileName;
-    if (!cityName) { noDomicile++; continue; } // no domicile on file — nothing to search from
-    const coords = await coordsFor(cityName);
-    if (!coords) { unresolvedCity++; continue; } // couldn't resolve a location — skip rather than guess
-    out.push(record(d, coords, dom.domicileCode || null));
+    const coords = cityName ? await coordsFor(cityName) : null;
+    if (coords) { out.push(record(d, coords, dom.domicileCode || null)); viaDomicile++; continue; }
+    out.push(record(d, { name: null, country: null, latitude: null, longitude: null }, dom && dom.domicileCode));
+    noDomicile++;
   }
   console.log(
-    "[RLB unassigned] via Relay domicile: resolved " + out.length + " driver(s), dropped " + noDomicile +
-    " (no domicile) and " + unresolvedCity + " (couldn't resolve domicile city to coordinates)"
+    "[RLB unassigned] " + out.length + " driver(s): " + viaDomicile + " with a domicile drop-off, " +
+    noDomicile + " with none (searched from the Search Location either way)"
   );
   return out;
 }
@@ -2439,15 +2525,17 @@ async function buildRelayTripsAvailability(tab, cfg) {
     await logError("background/buildRelayTripsAvailability/unassignedDrivers", e);
   }
 
-  // Search origin = the single configured Search Location (from rlb-settings),
-  // NOT each driver's own drop-off. Resolve it once and stamp it on every driver's
-  // freeLocation, so buildCityList produces ONE search city (all drivers matched
-  // from that location). Driver timing/identity is preserved.
+  // Search origin = the single configured Search Location (from rlb-settings), for
+  // EVERY driver — so buildCityList produces one search city. Each driver's real
+  // drop-off is preserved separately on apiLocation (set above for trip-based
+  // drivers) and is what the drivers panel displays. Timing/identity are untouched.
   await applySearchLocation(tab.id, cfg, combined);
   return combined;
 }
 
-// Resolve cfg.searchLocation → coords and overwrite freeLocation on every record.
+// Resolve cfg.searchLocation → coords and overwrite freeLocation on the records
+// passed in. Applied ONLY to drivers with no trip of their own to derive a dropoff
+// from (unassigned drivers) — trip-based drivers keep their real final dropoff.
 // Required: with no Search Location there's no origin to search from → config error.
 async function applySearchLocation(tabId, cfg, records) {
   const searchLoc = (cfg.searchLocation || "").trim();
@@ -2490,45 +2578,55 @@ async function buildRelayUnassignedAvailability(tab, cfg) {
     throw new Error("Couldn't fetch the drivers list: " + ((e && e.message) || e));
   }
   const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
+  // Search origin = the Search Location from rlb-settings, same as the trips
+  // fallback. Each driver's domicile stand-in for a drop-off stays on apiLocation
+  // for display.
+  await applySearchLocation(tab.id, cfg, unassigned);
   console.log("[RLB availability] FALLBACK unassigned-only — " + unassigned.length + " driver(s).");
   return unassigned;
 }
 
-async function refreshAvailabilityOnly(carrierCode) {
+async function refreshAvailabilityOnly(carrierCode, carrierType) {
   const cfg = await getConfig();
   // Carrier code comes from Relay's page (#case-carrier-scac), passed in by the
   // content script — NOT the popup. Inject it into cfg so every downstream call
   // (shifts API, approved-places) reads cfg.carrierCode as before.
   cfg.carrierCode = (carrierCode || "").trim();
+  // AFP vs RSP host — see resolveOntrackUrl.
+  cfg.ontrackUrl = resolveOntrackUrl(cfg, carrierType);
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
 
-  // ── TEMPORARY: schedule API (active-driver-shifts) is the MAIN flow, but it's
-  // held for now. The Relay-trips flow (formerly the fallback) is being used as
-  // the main flow. Source is "relay-trips-main" (NOT "…-fallback") so the on-page
-  // "shifts unavailable" banner stays hidden — this is intentional, not a failure.
-  // To restore the schedule API as primary, uncomment the block below and remove
-  // the direct Relay-trips call that follows it.
-  let availability, source = "relay-trips-main", apiError = null;
-  /*
+  // Force a fresh /api/v1/init on every "Find my best loads" click, rather than
+  // reusing a cached token — guarantees the schedule-api call always uses a
+  // token minted for whichever ontrackUrl is currently configured.
+  cfg.token = "";
+  await chrome.storage.local.set({ token: "" });
+
   // Primary: shifts API (active-driver-shifts). A Relay tab is still needed to
   // resolve any missing home city to coordinates via the cities endpoint.
   // Fallback: the original Relay-trips availability when the API fails.
-  source = "schedule-api";
+  // The fallback triggers on NO DRIVERS, not just on a failed call: FleetYes can
+  // answer 200 with an empty shift list (carrier registered but nobody scheduled),
+  // which is just as unusable as an error. Either way we fall back to Relay for the
+  // driver list — while the search PLACE still comes from rlb-settings.
+  let availability, source = "schedule-api", apiError = null, notRegistered = false;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
+    if (!availability.length) throw new Error("shifts API returned no drivers");
     console.log("[RLB availability] ✓ shifts API OK — " + availability.length + " driver(s) via schedule-api.");
   } catch (e) {
     await logError("background/refreshAvailabilityOnly/schedule", e);
     // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
     if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
     apiError = (e && e.message) || String(e);
-    console.warn("[RLB availability] ✗ shifts API FAILED (" + apiError + ") — falling back to Relay trips.");
+    notRegistered = !!(e && e.notRegistered);
+    console.warn("[RLB availability] ✗ shifts API unusable (" + apiError + ") — falling back to Relay trips.");
     await log(
       "loads",
-      "Driver shifts API unavailable (" + apiError + "). This usually means no drivers are set up for this " +
+      "No drivers from the FleetYes shifts API (" + apiError + "). This usually means no drivers are set up for this " +
       "carrier in FleetYes, or the carrier isn't registered yet. Falling back to reading drivers from Relay " +
-      "trips and searching each driver's location in its own tab.",
+      "trips, searched from the Search Location configured in FleetYes.",
       "warn"
     );
     try {
@@ -2536,19 +2634,12 @@ async function refreshAvailabilityOnly(carrierCode) {
       source = "relay-trips-fallback";
     } catch (e2) {
       await logError("background/refreshAvailabilityOnly/fallback", e2);
-      return { ok: false, error: "Shifts API failed (" + apiError + ") and Relay-trips fallback also failed: " + ((e2 && e2.message) || e2) };
+      return {
+        ok: false,
+        notRegistered: notRegistered,
+        error: "Shifts API failed (" + apiError + ") and Relay-trips fallback also failed: " + ((e2 && e2.message) || e2),
+      };
     }
-  }
-  */
-
-  // Relay-trips flow used directly as the main flow (schedule API held).
-  try {
-    availability = await buildRelayTripsAvailability(tab, cfg);
-  } catch (e) {
-    await logError("background/refreshAvailabilityOnly/relayTrips", e);
-    // Config errors (e.g. no Search Location from rlb-settings) surface as config.
-    if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
-    return { ok: false, error: (e && e.message) || String(e) };
   }
   console.log("[RLB availability] source=" + source + ", " + availability.length + " driver(s). JSON:", JSON.stringify(availability, null, 2));
   await chrome.storage.local.set({
@@ -2559,7 +2650,7 @@ async function refreshAvailabilityOnly(carrierCode) {
     // check can force a refresh when the user changes it (see ensureDrivers).
     plannerAvailabilitySearchLocation: (cfg.searchLocation || "").trim(),
   });
-  return { ok: true, count: availability.length, source: source, apiError: apiError };
+  return { ok: true, count: availability.length, source: source, apiError: apiError, notRegistered: notRegistered };
 }
 
 // Unassigned-drivers-ONLY refresh, for the dedicated "Find loads for
@@ -2570,31 +2661,40 @@ async function refreshAvailabilityOnly(carrierCode) {
 // each other's cached data, each can be reused/refreshed independently, and
 // scoring/highlighting driven by plannerAvailability is unaffected by this
 // flow running.
-async function refreshUnassignedDriversOnly(carrierCode) {
+async function refreshUnassignedDriversOnly(carrierCode, carrierType) {
   const cfg = await getConfig();
   cfg.carrierCode = (carrierCode || "").trim(); // from Relay's page, not the popup
+  cfg.ontrackUrl = resolveOntrackUrl(cfg, carrierType); // AFP vs RSP host — see resolveOntrackUrl
   const tab = await findRelayTab();
   if (!tab) return { ok: false, error: "No Amazon Relay tab found." };
   // Primary: shifts API. Fallback: the original Relay unassigned-drivers flow.
   // Writes to its own storage key so the two buttons stay independent (see
   // scoreLoadsForPage, which reads plannerAvailabilityUnassigned in "unassigned" mode).
-  let availability, source = "schedule-api", apiError = null;
+  // As in refreshAvailabilityOnly: an empty driver list counts as a miss, so a 200
+  // with no scheduled drivers falls back to Relay rather than caching nothing.
+  let availability, source = "schedule-api", apiError = null, notRegistered = false;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
+    if (!availability.length) throw new Error("shifts API returned no drivers");
     console.log("[RLB availability] ✓ shifts API OK (unassigned) — " + availability.length + " driver(s) via schedule-api.");
   } catch (e) {
     await logError("background/refreshUnassignedDriversOnly/schedule", e);
     // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
     if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
     apiError = (e && e.message) || String(e);
-    console.warn("[RLB availability] ✗ shifts API FAILED (" + apiError + ") — falling back to Relay unassigned.");
-    await log("loads", "Shifts API failed (" + apiError + ") — using Relay drivers instead.", "warn");
+    notRegistered = !!(e && e.notRegistered);
+    console.warn("[RLB availability] ✗ shifts API unusable (" + apiError + ") — falling back to Relay unassigned.");
+    await log("loads", "No drivers from the FleetYes shifts API (" + apiError + ") — using Relay drivers, searched from the FleetYes Search Location.", "warn");
     try {
       availability = await buildRelayUnassignedAvailability(tab, cfg);
       source = "relay-unassigned-fallback";
     } catch (e2) {
       await logError("background/refreshUnassignedDriversOnly/fallback", e2);
-      return { ok: false, error: "Shifts API failed (" + apiError + ") and Relay unassigned fallback also failed: " + ((e2 && e2.message) || e2) };
+      return {
+        ok: false,
+        notRegistered: notRegistered,
+        error: "Shifts API failed (" + apiError + ") and Relay unassigned fallback also failed: " + ((e2 && e2.message) || e2),
+      };
     }
   }
   console.log("[RLB availability] unassigned source=" + source + ", " + availability.length + " driver(s). JSON:", JSON.stringify(availability, null, 2));
@@ -2603,7 +2703,7 @@ async function refreshUnassignedDriversOnly(carrierCode) {
     plannerAvailabilityUnassignedAt: Date.now(),
     plannerAvailabilityUnassignedSource: source,
   });
-  return { ok: true, count: availability.length, source: source, apiError: apiError };
+  return { ok: true, count: availability.length, source: source, apiError: apiError, notRegistered: notRegistered };
 }
 
 // Score page-provided loads against stored availability → load-centric list
@@ -2661,7 +2761,7 @@ async function scoreLoadsForPage(loads, mode) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
   if (msg.type === "refresh-availability") {
-    refreshAvailabilityOnly(msg.carrierCode)
+    refreshAvailabilityOnly(msg.carrierCode, msg.carrierType)
       .then(sendResponse)
       .catch((e) => {
         logError("background/refresh-availability", e);
@@ -2679,7 +2779,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "refresh-unassigned-drivers") {
-    refreshUnassignedDriversOnly(msg.carrierCode)
+    refreshUnassignedDriversOnly(msg.carrierCode, msg.carrierType)
       .then(sendResponse)
       .catch((e) => {
         logError("background/refresh-unassigned-drivers", e);
@@ -2688,7 +2788,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "sync-rlb-settings") {
-    syncRlbSettings(msg.carrierCode)
+    syncRlbSettings(msg.carrierCode, msg.carrierType)
       .then(sendResponse)
       .catch((e) => {
         logError("background/sync-rlb-settings", e);

@@ -19,6 +19,7 @@
   var lastDriverErrorConfig = false; // true when lastDriverError is a config problem (missing settings)
   var lastAvailabilitySource = null; // "schedule-api" | "relay-trips-fallback" — from the last refresh
   var lastApiError = null; // the shifts-API error message when we fell back to Relay trips
+  var lastNotRegistered = false; // true when the shifts-API failure was specifically "carrier has no FleetYes account"
   var tip = null;
   var observer = null;
   var scheduled = false;
@@ -1321,12 +1322,14 @@
         // Carrier code comes from Relay's own page (#case-carrier-scac), not the
         // popup — pass it to the background, which has no DOM access.
         var carrierCode = readCarrierCode();
-        chrome.runtime.sendMessage({ type: "refresh-availability", carrierCode: carrierCode }, function (res) {
+        var carrierType = readCarrierType();
+        chrome.runtime.sendMessage({ type: "refresh-availability", carrierCode: carrierCode, carrierType: carrierType }, function (res) {
           if (chrome.runtime.lastError || !res || !res.ok) {
             var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unknown failure";
             logError("refreshDriversAsync", msg);
             lastDriverError = msg;
             lastDriverErrorConfig = !!(res && res.config);
+            lastNotRegistered = !!(res && res.notRegistered);
             resolve(0);
             return;
           }
@@ -1335,6 +1338,7 @@
           driverCount = res.count || 0; driverAt = Date.now();
           lastAvailabilitySource = res.source || "schedule-api";
           lastApiError = res.apiError || null;
+          lastNotRegistered = !!res.notRegistered;
           // Log which availability source ran so a silent fallback to Relay trips
           // (instead of the shifts API) is obvious in the page console.
           if (res.source === "relay-trips-fallback") {
@@ -1357,7 +1361,8 @@
     return new Promise(function (resolve) {
       try {
         var carrierCode = readCarrierCode();
-        chrome.runtime.sendMessage({ type: "refresh-unassigned-drivers", carrierCode: carrierCode }, function (res) {
+        var carrierType = readCarrierType();
+        chrome.runtime.sendMessage({ type: "refresh-unassigned-drivers", carrierCode: carrierCode, carrierType: carrierType }, function (res) {
           if (chrome.runtime.lastError || !res || !res.ok) {
             var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unknown failure";
             logError("refreshUnassignedDriversAsync", msg);
@@ -1474,6 +1479,8 @@
           // Missing settings (carrier code / token / search location) — point the
           // user straight at settings, not the Trips page.
           cardError("Setup needed", lastDriverError + " Open the extension popup to configure it, then try again.");
+        } else if (lastNotRegistered) {
+          cardError("No drivers found.", "It looks like you’re not registered with FleetYes yet, and we couldn’t find any trips on this Relay page either. Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers.");
         } else {
           var reason = lastDriverError ? ("Reason: " + lastDriverError + ". ") : "";
           cardError("No drivers found.", reason + "Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers.");
@@ -1637,6 +1644,12 @@
   // not the FleetYes schedule + Search Location. Empty string when the API worked.
   function fallbackNoteHtml() {
     if (lastAvailabilitySource !== "relay-trips-fallback") return "";
+    // The carrier has no FleetYes account at all (backend init 404) — plain,
+    // non-technical message instead of the generic API-failure text below.
+    if (lastNotRegistered) {
+      return '<div class="note fallback">It looks like you’re not registered with FleetYes yet. ' +
+        "Showing drivers read from Relay trips instead, searched from each driver’s own location.</div>";
+    }
     return (
       '<div class="note fallback">⚠ Driver shifts unavailable' +
       (lastApiError ? " (" + esc(lastApiError) + ")" : "") +
@@ -1726,6 +1739,18 @@
     return v || null;
   }
 
+  // Relay marks AFP carriers with a page meta tag: <meta name="isAFPCarrier"
+  // content="true"|"false">. true → AFP, false → RSP. If the tag is missing
+  // (carrier type unknown), return null — the background worker falls back to
+  // the default (AFP) host, and if this carrier isn't registered there either,
+  // the existing /api/v1/init rejection surfaces the "not registered" error
+  // exactly as it does today.
+  function readCarrierType() {
+    var el = document.querySelector('meta[name="isAFPCarrier"]');
+    if (!el) return null;
+    return el.content === "true" ? "afp" : "rsp";
+  }
+
   // Pull the latest RLB settings for this carrier from FleetYes and merge them
   // into the extension's storage before a run, so scoring uses server values.
   // Best-effort: a failure here must not block the drivers refresh — we log it
@@ -1737,8 +1762,9 @@
       done();
       return;
     }
+    var carrierType = readCarrierType();
     try {
-      chrome.runtime.sendMessage({ type: "sync-rlb-settings", carrierCode: carrierCode }, function (res) {
+      chrome.runtime.sendMessage({ type: "sync-rlb-settings", carrierCode: carrierCode, carrierType: carrierType }, function (res) {
         if (chrome.runtime.lastError || !res || !res.ok) {
           var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "failed";
           logError("syncSettings", msg);
@@ -1770,7 +1796,8 @@
     setPanel("rlb-msg", "Fetching trips…");
     try {
       var carrierCode = readCarrierCode();
-      chrome.runtime.sendMessage({ type: "refresh-availability", carrierCode: carrierCode }, function (res) {
+      var carrierType = readCarrierType();
+      chrome.runtime.sendMessage({ type: "refresh-availability", carrierCode: carrierCode, carrierType: carrierType }, function (res) {
         if (btn) { btn.disabled = false; btn.textContent = "Refresh drivers"; }
         if (chrome.runtime.lastError || !res || !res.ok) {
           var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "failed";
