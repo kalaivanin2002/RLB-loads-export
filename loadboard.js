@@ -19,6 +19,7 @@
   var lastDriverErrorConfig = false; // true when lastDriverError is a config problem (missing settings)
   var lastAvailabilitySource = null; // "schedule-api" | "relay-trips-fallback" — from the last refresh
   var lastApiError = null; // the shifts-API error message when we fell back to Relay trips
+  var lastNotRegistered = false; // true when the shifts-API failure was specifically "carrier has no FleetYes account"
   var tip = null;
   var observer = null;
   var scheduled = false;
@@ -1328,6 +1329,7 @@
             logError("refreshDriversAsync", msg);
             lastDriverError = msg;
             lastDriverErrorConfig = !!(res && res.config);
+            lastNotRegistered = !!(res && res.notRegistered);
             resolve(0);
             return;
           }
@@ -1336,6 +1338,7 @@
           driverCount = res.count || 0; driverAt = Date.now();
           lastAvailabilitySource = res.source || "schedule-api";
           lastApiError = res.apiError || null;
+          lastNotRegistered = !!res.notRegistered;
           // Log which availability source ran so a silent fallback to Relay trips
           // (instead of the shifts API) is obvious in the page console.
           if (res.source === "relay-trips-fallback") {
@@ -1476,6 +1479,8 @@
           // Missing settings (carrier code / token / search location) — point the
           // user straight at settings, not the Trips page.
           cardError("Setup needed", lastDriverError + " Open the extension popup to configure it, then try again.");
+        } else if (lastNotRegistered) {
+          cardError("No drivers found.", "It looks like you’re not registered with FleetYes yet, and we couldn’t find any trips on this Relay page either. Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers.");
         } else {
           var reason = lastDriverError ? ("Reason: " + lastDriverError + ". ") : "";
           cardError("No drivers found.", reason + "Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers.");
@@ -1639,6 +1644,12 @@
   // not the FleetYes schedule + Search Location. Empty string when the API worked.
   function fallbackNoteHtml() {
     if (lastAvailabilitySource !== "relay-trips-fallback") return "";
+    // The carrier has no FleetYes account at all (backend init 404) — plain,
+    // non-technical message instead of the generic API-failure text below.
+    if (lastNotRegistered) {
+      return '<div class="note fallback">It looks like you’re not registered with FleetYes yet. ' +
+        "Showing drivers read from Relay trips instead, searched from each driver’s own location.</div>";
+    }
     return (
       '<div class="note fallback">⚠ Driver shifts unavailable' +
       (lastApiError ? " (" + esc(lastApiError) + ")" : "") +

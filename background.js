@@ -1483,6 +1483,12 @@ async function fetchInitToken(cfg, carrierCode) {
   const text = await res.text();
   if (!res.ok) {
     const err = new Error("init HTTP " + res.status + ": " + text.slice(0, 200));
+    // FleetYes returns this specific 404 when the carrier has no FleetYes
+    // account at all — flag it so the UI can show a plain "you're not
+    // registered" message instead of the generic technical failure text.
+    if (res.status === 404 && /company not found for carrier/i.test(text)) {
+      err.notRegistered = true;
+    }
     await logError("background/fetchInitToken", err, { url: url, status: res.status });
     throw err;
   }
@@ -2537,7 +2543,7 @@ async function refreshAvailabilityOnly(carrierCode, carrierType) {
   // answer 200 with an empty shift list (carrier registered but nobody scheduled),
   // which is just as unusable as an error. Either way we fall back to Relay for the
   // driver list — while the search PLACE still comes from rlb-settings.
-  let availability, source = "schedule-api", apiError = null;
+  let availability, source = "schedule-api", apiError = null, notRegistered = false;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
     if (!availability.length) throw new Error("shifts API returned no drivers");
@@ -2547,6 +2553,7 @@ async function refreshAvailabilityOnly(carrierCode, carrierType) {
     // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
     if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
     apiError = (e && e.message) || String(e);
+    notRegistered = !!(e && e.notRegistered);
     console.warn("[RLB availability] ✗ shifts API unusable (" + apiError + ") — falling back to Relay trips.");
     await log(
       "loads",
@@ -2560,7 +2567,11 @@ async function refreshAvailabilityOnly(carrierCode, carrierType) {
       source = "relay-trips-fallback";
     } catch (e2) {
       await logError("background/refreshAvailabilityOnly/fallback", e2);
-      return { ok: false, error: "Shifts API failed (" + apiError + ") and Relay-trips fallback also failed: " + ((e2 && e2.message) || e2) };
+      return {
+        ok: false,
+        notRegistered: notRegistered,
+        error: "Shifts API failed (" + apiError + ") and Relay-trips fallback also failed: " + ((e2 && e2.message) || e2),
+      };
     }
   }
   console.log("[RLB availability] source=" + source + ", " + availability.length + " driver(s). JSON:", JSON.stringify(availability, null, 2));
@@ -2572,7 +2583,7 @@ async function refreshAvailabilityOnly(carrierCode, carrierType) {
     // check can force a refresh when the user changes it (see ensureDrivers).
     plannerAvailabilitySearchLocation: (cfg.searchLocation || "").trim(),
   });
-  return { ok: true, count: availability.length, source: source, apiError: apiError };
+  return { ok: true, count: availability.length, source: source, apiError: apiError, notRegistered: notRegistered };
 }
 
 // Unassigned-drivers-ONLY refresh, for the dedicated "Find loads for
@@ -2594,7 +2605,7 @@ async function refreshUnassignedDriversOnly(carrierCode, carrierType) {
   // scoreLoadsForPage, which reads plannerAvailabilityUnassigned in "unassigned" mode).
   // As in refreshAvailabilityOnly: an empty driver list counts as a miss, so a 200
   // with no scheduled drivers falls back to Relay rather than caching nothing.
-  let availability, source = "schedule-api", apiError = null;
+  let availability, source = "schedule-api", apiError = null, notRegistered = false;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
     if (!availability.length) throw new Error("shifts API returned no drivers");
@@ -2604,6 +2615,7 @@ async function refreshUnassignedDriversOnly(carrierCode, carrierType) {
     // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
     if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
     apiError = (e && e.message) || String(e);
+    notRegistered = !!(e && e.notRegistered);
     console.warn("[RLB availability] ✗ shifts API unusable (" + apiError + ") — falling back to Relay unassigned.");
     await log("loads", "No drivers from the FleetYes shifts API (" + apiError + ") — using Relay drivers, searched from the FleetYes Search Location.", "warn");
     try {
@@ -2611,7 +2623,11 @@ async function refreshUnassignedDriversOnly(carrierCode, carrierType) {
       source = "relay-unassigned-fallback";
     } catch (e2) {
       await logError("background/refreshUnassignedDriversOnly/fallback", e2);
-      return { ok: false, error: "Shifts API failed (" + apiError + ") and Relay unassigned fallback also failed: " + ((e2 && e2.message) || e2) };
+      return {
+        ok: false,
+        notRegistered: notRegistered,
+        error: "Shifts API failed (" + apiError + ") and Relay unassigned fallback also failed: " + ((e2 && e2.message) || e2),
+      };
     }
   }
   console.log("[RLB availability] unassigned source=" + source + ", " + availability.length + " driver(s). JSON:", JSON.stringify(availability, null, 2));
@@ -2620,7 +2636,7 @@ async function refreshUnassignedDriversOnly(carrierCode, carrierType) {
     plannerAvailabilityUnassignedAt: Date.now(),
     plannerAvailabilityUnassignedSource: source,
   });
-  return { ok: true, count: availability.length, source: source, apiError: apiError };
+  return { ok: true, count: availability.length, source: source, apiError: apiError, notRegistered: notRegistered };
 }
 
 // Score page-provided loads against stored availability → load-centric list
