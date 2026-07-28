@@ -1419,6 +1419,7 @@ function buildAvailability(entities, cfg) {
 // ontrackUrl — null falling through here means the existing init rejection
 // (fetchInitToken) surfaces the "not registered" error exactly as before.
 function resolveOntrackUrl(cfg, carrierType) {
+  console.log("[RLB] resolveOntrackUrl: carrierType=" + carrierType + ", cfg.ontrackUrl=" + cfg.ontrackUrl + ", cfg.rspUrl=" + cfg.rspUrl);
   return carrierType === "rsp" ? cfg.rspUrl : cfg.ontrackUrl;
 }
 function ontrackOrigin(cfg) {
