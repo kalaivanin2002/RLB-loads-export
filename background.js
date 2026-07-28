@@ -1385,6 +1385,10 @@ function buildAvailability(entities, cfg) {
       lastTripState: source ? source.state : null,
       lastTripEndTime: source ? new Date(source.end).toISOString() : null,
       freeLocation: freeLocation,
+      // The driver's real drop-off from the trip they came off. The search origin
+      // (freeLocation) gets overridden to the Search Location downstream, so keep the
+      // true drop-off here for the drivers panel's "Free city" column.
+      apiLocation: freeLocation,
       domicile: source ? source.domicile : null,
       equipment: source ? source.equipment : null,
       freeAt: effFreeStart > now ? new Date(effFreeStart).toISOString() : null,
@@ -1696,18 +1700,11 @@ async function buildScheduleAvailability(tabId, cfg) {
     const endMs = parseUkLocalMs(r.end_date, r.end_time);
     if (endMs == null) { noEnd++; continue; }
 
-    // The driver's OWN end location (drop-off) from the API — this is what they're
-    // searched FROM, and what the drivers panel shows as the "Free city".
+    // The driver's OWN end location (drop-off) from the API — shown in the drivers
+    // panel's "Free city" column. NOT used to search (that's freeLocation below).
     // City name is reverse-geocoded from lat/lng below if the API didn't supply one.
     const rowLoc = scheduleRowCoords(r);
     const apiLocation = rowLoc ? { city: rowLoc.city || null, latitude: rowLoc.latitude, longitude: rowLoc.longitude } : null;
-
-    // Search from the driver's real drop-off; only drivers whose shift row carries
-    // no end location fall back to the carrier's Search Location. The city name is
-    // still null here — it's backfilled by the reverse-geocode pass below.
-    const freeLocation = apiLocation
-      ? { city: apiLocation.city || null, country: null, latitude: apiLocation.latitude, longitude: apiLocation.longitude }
-      : searchLocation;
 
     // Free AFTER the shift ends. If the shift already ended, they're free now.
     const effFreeStart = Math.max(endMs, 0);
@@ -1716,8 +1713,8 @@ async function buildScheduleAvailability(tabId, cfg) {
       lastTripId: null,
       lastTripState: null,
       lastTripEndTime: new Date(endMs).toISOString(),
-      freeLocation: freeLocation, // the driver's own drop-off (or Search Location if absent)
-      apiLocation: apiLocation,   // the driver's own location from the API
+      freeLocation: searchLocation, // search FROM the configured Search Location
+      apiLocation: apiLocation,     // the driver's own drop-off (display only, not searched)
       domicile: null,
       equipment: null,
       freeAt: effFreeStart > now ? new Date(effFreeStart).toISOString() : null,
@@ -1728,39 +1725,23 @@ async function buildScheduleAvailability(tabId, cfg) {
       scheduleShift: { start: parseUkLocalMs(r.start_date, r.start_time), end: endMs },
     });
   }
-  // Reverse-geocode each driver's END location (drop-off) to a city name, for the
-  // drivers panel AND for the search itself — buildCityList groups by city name, so
-  // freeLocation.city must be filled in before it's used. Dedupe by rounded coords so
-  // identical locations resolve once, and only for rows the API didn't already name.
+  // Reverse-geocode each driver's END location (drop-off) to a city name for the
+  // drivers panel. Dedupe by rounded coords so identical locations resolve once,
+  // and only for rows the API didn't already name. reverseGeocode caches results.
   const rgCache = new Map();
   for (const rec of out) {
     const al = rec.apiLocation;
-    if (!al || al.latitude == null || al.longitude == null) continue;
-    if (!al.city) {
-      const k = Number(al.latitude).toFixed(4) + "," + Number(al.longitude).toFixed(4);
-      let cityName;
-      if (rgCache.has(k)) { cityName = rgCache.get(k); }
-      else { cityName = await reverseGeocode(al.latitude, al.longitude); rgCache.set(k, cityName); }
-      al.city = cityName || null;
-    }
-    // Mirror the resolved name onto freeLocation when that's the drop-off (not the
-    // Search Location fallback, which already carries a proper city name).
-    if (rec.freeLocation && rec.freeLocation !== searchLocation && !rec.freeLocation.city) {
-      rec.freeLocation.city = al.city;
-    }
-  }
-  // A drop-off we couldn't name is unusable as a search origin → use the Search Location.
-  let viaDropoff = 0, viaSearchLoc = 0;
-  for (const rec of out) {
-    if (rec.freeLocation && rec.freeLocation !== searchLocation && rec.freeLocation.city) { viaDropoff++; continue; }
-    rec.freeLocation = searchLocation;
-    viaSearchLoc++;
+    if (!al || al.city || al.latitude == null || al.longitude == null) continue;
+    const k = Number(al.latitude).toFixed(4) + "," + Number(al.longitude).toFixed(4);
+    let cityName;
+    if (rgCache.has(k)) { cityName = rgCache.get(k); }
+    else { cityName = await reverseGeocode(al.latitude, al.longitude); rgCache.set(k, cityName); }
+    al.city = cityName || null;
   }
 
   out.sort((x, y) => Date.parse(x.freeAtEffective) - Date.parse(y.freeAtEffective));
   console.log(
-    "[RLB availability] built " + out.length + " schedule-based driver(s): " + viaDropoff +
-    ' searching from their own drop-off, ' + viaSearchLoc + ' from the Search Location "' + searchLoc +
+    "[RLB availability] built " + out.length + ' schedule-based driver(s) searching from "' + searchLoc +
     '"; dropped ' + noEnd + " (no/invalid shift end)."
   );
   return out;
@@ -2371,6 +2352,11 @@ async function buildUnassignedDriverAvailability(tabId, cfg, allDrivers, assigne
     lastTripState: null,
     lastTripEndTime: null,
     freeLocation: { city: coords.name, country: coords.country || null, latitude: coords.latitude, longitude: coords.longitude },
+    // No trip → no real drop-off. The domicile stands in for it in the drivers panel;
+    // null coords simply render as "—". The search origin is overridden downstream.
+    apiLocation: coords.latitude != null && coords.longitude != null
+      ? { city: coords.name, latitude: coords.latitude, longitude: coords.longitude }
+      : null,
     domicile: domicileCode || null,
     equipment: null,
     freeAt: null,
@@ -2409,27 +2395,23 @@ async function buildUnassignedDriverAvailability(tabId, cfg, allDrivers, assigne
   }
 
   // ── OFF / fallback: each driver's Relay home domicile ──────────────────────────
-  // Last resort per driver: domicile, then the carrier's Search Location. A driver
-  // with no domicile on file (or one that won't geocode) is placed at the Search
-  // Location rather than dropped, so they still get loads offered to them.
-  let viaDomicile = 0, viaSearchLoc = 0, dropped = 0;
-  const searchLocCoords = await (async () => {
-    const s = (cfg.searchLocation || "").trim();
-    return s ? await coordsFor(s) : null;
-  })();
+  // Unassigned drivers have no trip and therefore no drop-off. A driver with no
+  // domicile on file still gets a record: the search origin is overridden to the
+  // Search Location downstream anyway, so there's nothing to resolve here — their
+  // drop-off simply shows as unknown in the panel.
+  let viaDomicile = 0, noDomicile = 0;
   const out = [];
   for (const d of unassigned) {
     const dom = d.domiciles && d.domiciles[0];
     const cityName = dom && dom.domicileName;
     const coords = cityName ? await coordsFor(cityName) : null;
     if (coords) { out.push(record(d, coords, dom.domicileCode || null)); viaDomicile++; continue; }
-    // No domicile, or it wouldn't resolve → fall back to the Search Location.
-    if (searchLocCoords) { out.push(record(d, searchLocCoords, null)); viaSearchLoc++; continue; }
-    dropped++; // no domicile AND no usable Search Location — nothing to search from
+    out.push(record(d, { name: null, country: null, latitude: null, longitude: null }, dom && dom.domicileCode));
+    noDomicile++;
   }
   console.log(
-    "[RLB unassigned] resolved " + out.length + " driver(s): " + viaDomicile + " via domicile, " +
-    viaSearchLoc + " via Search Location; dropped " + dropped + " (no domicile and no Search Location)"
+    "[RLB unassigned] " + out.length + " driver(s): " + viaDomicile + " with a domicile drop-off, " +
+    noDomicile + " with none (searched from the Search Location either way)"
   );
   return out;
 }
@@ -2455,13 +2437,7 @@ async function buildRelayTripsAvailability(tab, cfg) {
   const availability = buildAvailability(entities, cfg);
   console.log("[RLB availability] built " + availability.length + " trip-based driver(s).");
 
-  // Trip-based drivers search FROM their own final dropoff — buildAvailability
-  // already set freeLocation from the trip's endLocation, so we leave it alone.
-
-  // Fold in unassigned drivers too — non-fatal if this leg fails. These have no trip
-  // to derive a dropoff from, so buildUnassignedDriverAvailability places each one at
-  // its domicile, falling back to the Search Location. No blanket override here —
-  // that would flatten every driver onto the same origin.
+  // Fold in unassigned drivers too — non-fatal if this leg fails.
   let combined = availability;
   try {
     const allDrivers = await fetchAllDrivers(tab.id, cfg);
@@ -2472,6 +2448,11 @@ async function buildRelayTripsAvailability(tab, cfg) {
     await logError("background/buildRelayTripsAvailability/unassignedDrivers", e);
   }
 
+  // Search origin = the single configured Search Location (from rlb-settings), for
+  // EVERY driver — so buildCityList produces one search city. Each driver's real
+  // drop-off is preserved separately on apiLocation (set above for trip-based
+  // drivers) and is what the drivers panel displays. Timing/identity are untouched.
+  await applySearchLocation(tab.id, cfg, combined);
   return combined;
 }
 
@@ -2519,10 +2500,11 @@ async function buildRelayUnassignedAvailability(tab, cfg) {
   } catch (e) {
     throw new Error("Couldn't fetch the drivers list: " + ((e && e.message) || e));
   }
-  // Each driver keeps its own origin (domicile, or the Search Location when there's
-  // no domicile) as resolved by buildUnassignedDriverAvailability — no blanket
-  // override, which would flatten every driver onto the same city.
   const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
+  // Search origin = the Search Location from rlb-settings, same as the trips
+  // fallback. Each driver's domicile stand-in for a drop-off stays on apiLocation
+  // for display.
+  await applySearchLocation(tab.id, cfg, unassigned);
   console.log("[RLB availability] FALLBACK unassigned-only — " + unassigned.length + " driver(s).");
   return unassigned;
 }
