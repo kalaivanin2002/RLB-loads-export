@@ -1321,7 +1321,8 @@
         // Carrier code comes from Relay's own page (#case-carrier-scac), not the
         // popup — pass it to the background, which has no DOM access.
         var carrierCode = readCarrierCode();
-        chrome.runtime.sendMessage({ type: "refresh-availability", carrierCode: carrierCode }, function (res) {
+        var carrierType = readCarrierType();
+        chrome.runtime.sendMessage({ type: "refresh-availability", carrierCode: carrierCode, carrierType: carrierType }, function (res) {
           if (chrome.runtime.lastError || !res || !res.ok) {
             var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unknown failure";
             logError("refreshDriversAsync", msg);
@@ -1357,7 +1358,8 @@
     return new Promise(function (resolve) {
       try {
         var carrierCode = readCarrierCode();
-        chrome.runtime.sendMessage({ type: "refresh-unassigned-drivers", carrierCode: carrierCode }, function (res) {
+        var carrierType = readCarrierType();
+        chrome.runtime.sendMessage({ type: "refresh-unassigned-drivers", carrierCode: carrierCode, carrierType: carrierType }, function (res) {
           if (chrome.runtime.lastError || !res || !res.ok) {
             var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "unknown failure";
             logError("refreshUnassignedDriversAsync", msg);
@@ -1726,6 +1728,18 @@
     return v || null;
   }
 
+  // Relay marks AFP carriers with a page meta tag: <meta name="isAFPCarrier"
+  // content="true"|"false">. true → AFP, false → RSP. If the tag is missing
+  // (carrier type unknown), return null — the background worker falls back to
+  // the default (AFP) host, and if this carrier isn't registered there either,
+  // the existing /api/v1/init rejection surfaces the "not registered" error
+  // exactly as it does today.
+  function readCarrierType() {
+    var el = document.querySelector('meta[name="isAFPCarrier"]');
+    if (!el) return null;
+    return el.content === "true" ? "afp" : "rsp";
+  }
+
   // Pull the latest RLB settings for this carrier from FleetYes and merge them
   // into the extension's storage before a run, so scoring uses server values.
   // Best-effort: a failure here must not block the drivers refresh — we log it
@@ -1737,8 +1751,9 @@
       done();
       return;
     }
+    var carrierType = readCarrierType();
     try {
-      chrome.runtime.sendMessage({ type: "sync-rlb-settings", carrierCode: carrierCode }, function (res) {
+      chrome.runtime.sendMessage({ type: "sync-rlb-settings", carrierCode: carrierCode, carrierType: carrierType }, function (res) {
         if (chrome.runtime.lastError || !res || !res.ok) {
           var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "failed";
           logError("syncSettings", msg);
@@ -1770,7 +1785,8 @@
     setPanel("rlb-msg", "Fetching trips…");
     try {
       var carrierCode = readCarrierCode();
-      chrome.runtime.sendMessage({ type: "refresh-availability", carrierCode: carrierCode }, function (res) {
+      var carrierType = readCarrierType();
+      chrome.runtime.sendMessage({ type: "refresh-availability", carrierCode: carrierCode, carrierType: carrierType }, function (res) {
         if (btn) { btn.disabled = false; btn.textContent = "Refresh drivers"; }
         if (chrome.runtime.lastError || !res || !res.ok) {
           var msg = (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "failed";
