@@ -1682,7 +1682,8 @@ async function buildScheduleAvailability(tabId, cfg) {
     err.config = true;
     throw err;
   }
-  const freeLocation = { city: c.name, country: c.country || null, latitude: c.latitude, longitude: c.longitude };
+  // Origin of last resort: used for drivers whose shift row carries no end location.
+  const searchLocation = { city: c.name, country: c.country || null, latitude: c.latitude, longitude: c.longitude };
 
   // Then fetch the shifts (also throws config errors for missing carrier/token).
   const rows = await fetchDriverSchedule(cfg);
@@ -1695,11 +1696,18 @@ async function buildScheduleAvailability(tabId, cfg) {
     const endMs = parseUkLocalMs(r.end_date, r.end_time);
     if (endMs == null) { noEnd++; continue; }
 
-    // The driver's OWN end location (drop-off) from the API — shown in the drivers
-    // panel's "Free city" column. NOT used to search (that's freeLocation above).
+    // The driver's OWN end location (drop-off) from the API — this is what they're
+    // searched FROM, and what the drivers panel shows as the "Free city".
     // City name is reverse-geocoded from lat/lng below if the API didn't supply one.
     const rowLoc = scheduleRowCoords(r);
     const apiLocation = rowLoc ? { city: rowLoc.city || null, latitude: rowLoc.latitude, longitude: rowLoc.longitude } : null;
+
+    // Search from the driver's real drop-off; only drivers whose shift row carries
+    // no end location fall back to the carrier's Search Location. The city name is
+    // still null here — it's backfilled by the reverse-geocode pass below.
+    const freeLocation = apiLocation
+      ? { city: apiLocation.city || null, country: null, latitude: apiLocation.latitude, longitude: apiLocation.longitude }
+      : searchLocation;
 
     // Free AFTER the shift ends. If the shift already ended, they're free now.
     const effFreeStart = Math.max(endMs, 0);
@@ -1708,8 +1716,8 @@ async function buildScheduleAvailability(tabId, cfg) {
       lastTripId: null,
       lastTripState: null,
       lastTripEndTime: new Date(endMs).toISOString(),
-      freeLocation: freeLocation, // search FROM the configured Search Location
-      apiLocation: apiLocation,   // the driver's own location from the API (kept, unused for search)
+      freeLocation: freeLocation, // the driver's own drop-off (or Search Location if absent)
+      apiLocation: apiLocation,   // the driver's own location from the API
       domicile: null,
       equipment: null,
       freeAt: effFreeStart > now ? new Date(effFreeStart).toISOString() : null,
@@ -1720,23 +1728,39 @@ async function buildScheduleAvailability(tabId, cfg) {
       scheduleShift: { start: parseUkLocalMs(r.start_date, r.start_time), end: endMs },
     });
   }
-  // Reverse-geocode each driver's END location (drop-off) to a city name for the
-  // drivers panel. Dedupe by rounded coords so identical locations resolve once,
-  // and only for rows the API didn't already name. reverseGeocode caches results.
+  // Reverse-geocode each driver's END location (drop-off) to a city name, for the
+  // drivers panel AND for the search itself — buildCityList groups by city name, so
+  // freeLocation.city must be filled in before it's used. Dedupe by rounded coords so
+  // identical locations resolve once, and only for rows the API didn't already name.
   const rgCache = new Map();
   for (const rec of out) {
     const al = rec.apiLocation;
-    if (!al || al.city || al.latitude == null || al.longitude == null) continue;
-    const k = Number(al.latitude).toFixed(4) + "," + Number(al.longitude).toFixed(4);
-    let cityName;
-    if (rgCache.has(k)) { cityName = rgCache.get(k); }
-    else { cityName = await reverseGeocode(al.latitude, al.longitude); rgCache.set(k, cityName); }
-    al.city = cityName || null;
+    if (!al || al.latitude == null || al.longitude == null) continue;
+    if (!al.city) {
+      const k = Number(al.latitude).toFixed(4) + "," + Number(al.longitude).toFixed(4);
+      let cityName;
+      if (rgCache.has(k)) { cityName = rgCache.get(k); }
+      else { cityName = await reverseGeocode(al.latitude, al.longitude); rgCache.set(k, cityName); }
+      al.city = cityName || null;
+    }
+    // Mirror the resolved name onto freeLocation when that's the drop-off (not the
+    // Search Location fallback, which already carries a proper city name).
+    if (rec.freeLocation && rec.freeLocation !== searchLocation && !rec.freeLocation.city) {
+      rec.freeLocation.city = al.city;
+    }
+  }
+  // A drop-off we couldn't name is unusable as a search origin → use the Search Location.
+  let viaDropoff = 0, viaSearchLoc = 0;
+  for (const rec of out) {
+    if (rec.freeLocation && rec.freeLocation !== searchLocation && rec.freeLocation.city) { viaDropoff++; continue; }
+    rec.freeLocation = searchLocation;
+    viaSearchLoc++;
   }
 
   out.sort((x, y) => Date.parse(x.freeAtEffective) - Date.parse(y.freeAtEffective));
   console.log(
-    "[RLB availability] built " + out.length + ' schedule-based driver(s) searching from "' + searchLoc +
+    "[RLB availability] built " + out.length + " schedule-based driver(s): " + viaDropoff +
+    ' searching from their own drop-off, ' + viaSearchLoc + ' from the Search Location "' + searchLoc +
     '"; dropped ' + noEnd + " (no/invalid shift end)."
   );
   return out;
