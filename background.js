@@ -2385,19 +2385,27 @@ async function buildUnassignedDriverAvailability(tabId, cfg, allDrivers, assigne
   }
 
   // ── OFF / fallback: each driver's Relay home domicile ──────────────────────────
-  let noDomicile = 0, unresolvedCity = 0;
+  // Last resort per driver: domicile, then the carrier's Search Location. A driver
+  // with no domicile on file (or one that won't geocode) is placed at the Search
+  // Location rather than dropped, so they still get loads offered to them.
+  let viaDomicile = 0, viaSearchLoc = 0, dropped = 0;
+  const searchLocCoords = await (async () => {
+    const s = (cfg.searchLocation || "").trim();
+    return s ? await coordsFor(s) : null;
+  })();
   const out = [];
   for (const d of unassigned) {
     const dom = d.domiciles && d.domiciles[0];
     const cityName = dom && dom.domicileName;
-    if (!cityName) { noDomicile++; continue; } // no domicile on file — nothing to search from
-    const coords = await coordsFor(cityName);
-    if (!coords) { unresolvedCity++; continue; } // couldn't resolve a location — skip rather than guess
-    out.push(record(d, coords, dom.domicileCode || null));
+    const coords = cityName ? await coordsFor(cityName) : null;
+    if (coords) { out.push(record(d, coords, dom.domicileCode || null)); viaDomicile++; continue; }
+    // No domicile, or it wouldn't resolve → fall back to the Search Location.
+    if (searchLocCoords) { out.push(record(d, searchLocCoords, null)); viaSearchLoc++; continue; }
+    dropped++; // no domicile AND no usable Search Location — nothing to search from
   }
   console.log(
-    "[RLB unassigned] via Relay domicile: resolved " + out.length + " driver(s), dropped " + noDomicile +
-    " (no domicile) and " + unresolvedCity + " (couldn't resolve domicile city to coordinates)"
+    "[RLB unassigned] resolved " + out.length + " driver(s): " + viaDomicile + " via domicile, " +
+    viaSearchLoc + " via Search Location; dropped " + dropped + " (no domicile and no Search Location)"
   );
   return out;
 }
@@ -2426,15 +2434,15 @@ async function buildRelayTripsAvailability(tab, cfg) {
   // Trip-based drivers search FROM their own final dropoff — buildAvailability
   // already set freeLocation from the trip's endLocation, so we leave it alone.
 
-  // Fold in unassigned drivers too — non-fatal if this leg fails. These have no
-  // trips and therefore no dropoff, so they're the only ones stamped with the
-  // Search Location (from rlb-settings) as their origin.
+  // Fold in unassigned drivers too — non-fatal if this leg fails. These have no trip
+  // to derive a dropoff from, so buildUnassignedDriverAvailability places each one at
+  // its domicile, falling back to the Search Location. No blanket override here —
+  // that would flatten every driver onto the same origin.
   let combined = availability;
   try {
     const allDrivers = await fetchAllDrivers(tab.id, cfg);
     const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
     console.log("[RLB availability] " + unassigned.length + " unassigned driver(s).");
-    await applySearchLocation(tab.id, cfg, unassigned);
     combined = availability.concat(unassigned);
   } catch (e) {
     await logError("background/buildRelayTripsAvailability/unassignedDrivers", e);
@@ -2487,12 +2495,10 @@ async function buildRelayUnassignedAvailability(tab, cfg) {
   } catch (e) {
     throw new Error("Couldn't fetch the drivers list: " + ((e && e.message) || e));
   }
+  // Each driver keeps its own origin (domicile, or the Search Location when there's
+  // no domicile) as resolved by buildUnassignedDriverAvailability — no blanket
+  // override, which would flatten every driver onto the same city.
   const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
-  // Drivers come from Relay, but the PLACE they're searched from must still be the
-  // Search Location owned by FleetYes (rlb-settings) — same rule as the trips
-  // fallback. Overwrites the per-driver domicile/approved-place freeLocation so
-  // every fallback driver searches from the one configured origin.
-  await applySearchLocation(tab.id, cfg, unassigned);
   console.log("[RLB availability] FALLBACK unassigned-only — " + unassigned.length + " driver(s).");
   return unassigned;
 }
