@@ -2485,6 +2485,11 @@ async function buildRelayUnassignedAvailability(tab, cfg) {
     throw new Error("Couldn't fetch the drivers list: " + ((e && e.message) || e));
   }
   const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
+  // Drivers come from Relay, but the PLACE they're searched from must still be the
+  // Search Location owned by FleetYes (rlb-settings) — same rule as the trips
+  // fallback. Overwrites the per-driver domicile/approved-place freeLocation so
+  // every fallback driver searches from the one configured origin.
+  await applySearchLocation(tab.id, cfg, unassigned);
   console.log("[RLB availability] FALLBACK unassigned-only — " + unassigned.length + " driver(s).");
   return unassigned;
 }
@@ -2507,21 +2512,26 @@ async function refreshAvailabilityOnly(carrierCode) {
   // Primary: shifts API (active-driver-shifts). A Relay tab is still needed to
   // resolve any missing home city to coordinates via the cities endpoint.
   // Fallback: the original Relay-trips availability when the API fails.
+  // The fallback triggers on NO DRIVERS, not just on a failed call: FleetYes can
+  // answer 200 with an empty shift list (carrier registered but nobody scheduled),
+  // which is just as unusable as an error. Either way we fall back to Relay for the
+  // driver list — while the search PLACE still comes from rlb-settings.
   let availability, source = "schedule-api", apiError = null;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
+    if (!availability.length) throw new Error("shifts API returned no drivers");
     console.log("[RLB availability] ✓ shifts API OK — " + availability.length + " driver(s) via schedule-api.");
   } catch (e) {
     await logError("background/refreshAvailabilityOnly/schedule", e);
     // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
     if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
     apiError = (e && e.message) || String(e);
-    console.warn("[RLB availability] ✗ shifts API FAILED (" + apiError + ") — falling back to Relay trips.");
+    console.warn("[RLB availability] ✗ shifts API unusable (" + apiError + ") — falling back to Relay trips.");
     await log(
       "loads",
-      "Driver shifts API unavailable (" + apiError + "). This usually means no drivers are set up for this " +
+      "No drivers from the FleetYes shifts API (" + apiError + "). This usually means no drivers are set up for this " +
       "carrier in FleetYes, or the carrier isn't registered yet. Falling back to reading drivers from Relay " +
-      "trips and searching each driver's location in its own tab.",
+      "trips, searched from the Search Location configured in FleetYes.",
       "warn"
     );
     try {
@@ -2560,17 +2570,20 @@ async function refreshUnassignedDriversOnly(carrierCode) {
   // Primary: shifts API. Fallback: the original Relay unassigned-drivers flow.
   // Writes to its own storage key so the two buttons stay independent (see
   // scoreLoadsForPage, which reads plannerAvailabilityUnassigned in "unassigned" mode).
+  // As in refreshAvailabilityOnly: an empty driver list counts as a miss, so a 200
+  // with no scheduled drivers falls back to Relay rather than caching nothing.
   let availability, source = "schedule-api", apiError = null;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
+    if (!availability.length) throw new Error("shifts API returned no drivers");
     console.log("[RLB availability] ✓ shifts API OK (unassigned) — " + availability.length + " driver(s) via schedule-api.");
   } catch (e) {
     await logError("background/refreshUnassignedDriversOnly/schedule", e);
     // Config errors (e.g. no Search Location) surface directly — no Relay fallback.
     if (e && e.config) return { ok: false, config: true, error: (e && e.message) || String(e) };
     apiError = (e && e.message) || String(e);
-    console.warn("[RLB availability] ✗ shifts API FAILED (" + apiError + ") — falling back to Relay unassigned.");
-    await log("loads", "Shifts API failed (" + apiError + ") — using Relay drivers instead.", "warn");
+    console.warn("[RLB availability] ✗ shifts API unusable (" + apiError + ") — falling back to Relay unassigned.");
+    await log("loads", "No drivers from the FleetYes shifts API (" + apiError + ") — using Relay drivers, searched from the FleetYes Search Location.", "warn");
     try {
       availability = await buildRelayUnassignedAvailability(tab, cfg);
       source = "relay-unassigned-fallback";
