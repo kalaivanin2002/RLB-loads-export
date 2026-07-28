@@ -55,13 +55,57 @@ const DEFAULTS = {
   weightReposition: 20, // favours loads that finish near where the driver started
 };
 
+// Hosts that older builds of this extension persisted into storage back when the
+// popup still let you edit the OnTrack base URL. The popup is info-only now and
+// the AFP/RSP hosts come from DEFAULTS, but a stored value still wins in the
+// Object.assign below — so an upgraded install keeps calling the legacy host and
+// RSP carriers never reach rsp-api. Treat these as unset so DEFAULTS applies.
+const LEGACY_ONTRACK_HOSTS = ["ontrack-api.agilecyber.com"];
+
+function isLegacyOntrackUrl(v) {
+  if (!v) return false;
+  const raw = String(v).trim();
+  if (!raw) return false;
+  let host;
+  try { host = new URL(raw).hostname; }
+  catch (e) { host = raw.replace(/^https?:\/\//i, "").split("/")[0]; }
+  return LEGACY_ONTRACK_HOSTS.indexOf(host.toLowerCase()) !== -1;
+}
+
 function getConfig() {
   return new Promise((resolve) => {
     chrome.storage.local.get(Object.keys(DEFAULTS), (r) => {
-      resolve(Object.assign({}, DEFAULTS, r || {}));
+      const stored = Object.assign({}, r || {});
+      // A blank or legacy ontrackUrl/rspUrl must fall through to DEFAULTS rather
+      // than override it (Object.assign only skips `undefined`, not "" or stale).
+      if (!stored.ontrackUrl || isLegacyOntrackUrl(stored.ontrackUrl)) delete stored.ontrackUrl;
+      if (!stored.rspUrl || isLegacyOntrackUrl(stored.rspUrl)) delete stored.rspUrl;
+      resolve(Object.assign({}, DEFAULTS, stored));
     });
   });
 }
+
+// Scrub the legacy host out of storage once, so it stops shadowing DEFAULTS and
+// no longer shows up in the popup/debug views. getConfig already ignores it at
+// read time — this just stops the dead value being carried around forever. Any
+// cached Bearer token minted against that host is dropped with it, since a token
+// is only valid for the origin it was issued by (see ensureToken).
+(function migrateLegacyOntrackUrl() {
+  try {
+    chrome.storage.local.get(["ontrackUrl", "rspUrl", "token", "tokenHost"], (r) => {
+      if (chrome.runtime.lastError || !r) return;
+      const patch = {};
+      if (isLegacyOntrackUrl(r.ontrackUrl)) patch.ontrackUrl = DEFAULTS.ontrackUrl;
+      if (isLegacyOntrackUrl(r.rspUrl)) patch.rspUrl = DEFAULTS.rspUrl;
+      if (isLegacyOntrackUrl(r.tokenHost)) { patch.token = ""; patch.tokenHost = ""; }
+      if (Object.keys(patch).length) {
+        chrome.storage.local.set(patch, () => {
+          console.log("[RLB] migrated legacy ontrackUrl out of storage:", Object.keys(patch).join(", "));
+        });
+      }
+    });
+  } catch (e) { /* worker torn down mid-migration — retried on next startup */ }
+})();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
