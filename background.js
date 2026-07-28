@@ -2423,26 +2423,29 @@ async function buildRelayTripsAvailability(tab, cfg) {
   const availability = buildAvailability(entities, cfg);
   console.log("[RLB availability] built " + availability.length + " trip-based driver(s).");
 
-  // Fold in unassigned drivers too — non-fatal if this leg fails.
+  // Trip-based drivers search FROM their own final dropoff — buildAvailability
+  // already set freeLocation from the trip's endLocation, so we leave it alone.
+
+  // Fold in unassigned drivers too — non-fatal if this leg fails. These have no
+  // trips and therefore no dropoff, so they're the only ones stamped with the
+  // Search Location (from rlb-settings) as their origin.
   let combined = availability;
   try {
     const allDrivers = await fetchAllDrivers(tab.id, cfg);
     const unassigned = await buildUnassignedDriverAvailability(tab.id, cfg, allDrivers, assignedDriverIds(entities));
     console.log("[RLB availability] " + unassigned.length + " unassigned driver(s).");
+    await applySearchLocation(tab.id, cfg, unassigned);
     combined = availability.concat(unassigned);
   } catch (e) {
     await logError("background/buildRelayTripsAvailability/unassignedDrivers", e);
   }
 
-  // Search origin = the single configured Search Location (from rlb-settings),
-  // NOT each driver's own drop-off. Resolve it once and stamp it on every driver's
-  // freeLocation, so buildCityList produces ONE search city (all drivers matched
-  // from that location). Driver timing/identity is preserved.
-  await applySearchLocation(tab.id, cfg, combined);
   return combined;
 }
 
-// Resolve cfg.searchLocation → coords and overwrite freeLocation on every record.
+// Resolve cfg.searchLocation → coords and overwrite freeLocation on the records
+// passed in. Applied ONLY to drivers with no trip of their own to derive a dropoff
+// from (unassigned drivers) — trip-based drivers keep their real final dropoff.
 // Required: with no Search Location there's no origin to search from → config error.
 async function applySearchLocation(tabId, cfg, records) {
   const searchLoc = (cfg.searchLocation || "").trim();
