@@ -1387,7 +1387,8 @@ function buildAvailability(entities, cfg) {
       freeLocation: freeLocation,
       // The driver's real drop-off from the trip they came off. The search origin
       // (freeLocation) gets overridden to the Search Location downstream, so keep the
-      // true drop-off here for the drivers panel's "Free city" column.
+      // true drop-off here — it's shown in the drivers panel and is what deadhead /
+      // return / drive-time are measured from.
       apiLocation: freeLocation,
       domicile: source ? source.domicile : null,
       equipment: source ? source.equipment : null,
@@ -1714,7 +1715,7 @@ async function buildScheduleAvailability(tabId, cfg) {
       lastTripState: null,
       lastTripEndTime: new Date(endMs).toISOString(),
       freeLocation: searchLocation, // search FROM the configured Search Location
-      apiLocation: apiLocation,     // the driver's own drop-off (display only, not searched)
+      apiLocation: apiLocation,     // the driver's own drop-off — displayed, and what distances measure from
       domicile: null,
       equipment: null,
       freeAt: effFreeStart > now ? new Date(effFreeStart).toISOString() : null,
@@ -1801,7 +1802,14 @@ function planLoadsForDriver(avail, response, cfg) {
   if (effNext != null && effNext < upper) upper = effNext; // can't start after next commitment
   const wos = response && Array.isArray(response.workOpportunities) ? response.workOpportunities : [];
 
-  const fl = avail.freeLocation || {};
+  // Distances (deadhead, return, drive time) measure from where the driver ACTUALLY
+  // is — their own drop-off on apiLocation — not from freeLocation, which is the
+  // shared Search Location every driver is searched from. Using freeLocation here
+  // would give every driver the same deadhead. Falls back to freeLocation for
+  // drivers with no known drop-off (e.g. unassigned drivers with no domicile).
+  const fl = (avail.apiLocation && avail.apiLocation.latitude != null && avail.apiLocation.longitude != null)
+    ? avail.apiLocation
+    : (avail.freeLocation || {});
   const dropLat = fl.latitude != null ? fl.latitude : null;
   const dropLng = fl.longitude != null ? fl.longitude : null;
   const nearby = Number(cfg && cfg.nearbyRadius) || 10;
