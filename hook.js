@@ -140,6 +140,19 @@
           if (!response.ok) {
             reportError("fetch:" + tag, { url: url, status: response.status, statusText: response.statusText });
           }
+          // Null-body responses must be handed straight back, BEFORE we read
+          // anything. `new Response(body, { status: 204 | 205 | 304 })` throws a
+          // TypeError — the spec forbids a body on those statuses — which used to
+          // land in the catch below and return `new Response(text)`, i.e. a
+          // synthetic **status 200 with an empty body**. Relay then saw a
+          // successful empty search where the server had actually said "not
+          // modified", and silently rendered no results. A 304 is routine on this
+          // endpoint once the browser cache warms, so this fired intermittently
+          // and looked like a Relay bug. There is no JSON to capture from a
+          // bodyless response anyway, so there is nothing to lose by skipping.
+          if (response.status === 204 || response.status === 205 || response.status === 304 || !response.body) {
+            return response;
+          }
           return response.text().then(function (text) {
             try {
               var data = JSON.parse(text);
@@ -153,9 +166,21 @@
             }
             // Rebuild an equivalent Response so the page's own code still works.
             try {
-              return new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers });
+              var rebuilt = new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers });
+              // The constructor can't carry these across, and SPA code commonly
+              // reads response.url after a redirect. Copy them so the rebuilt
+              // response is indistinguishable from the original to the page.
+              try {
+                Object.defineProperty(rebuilt, "url", { value: response.url });
+                Object.defineProperty(rebuilt, "redirected", { value: response.redirected });
+              } catch (e) { /* already non-configurable — harmless */ }
+              return rebuilt;
             } catch (e) {
-              return new Response(text);
+              // Should be unreachable now the null-body statuses are filtered
+              // above. Report it rather than silently handing the page a
+              // synthetic 200, which is what masked the 304 bug for so long.
+              reportError("fetch:" + tag + ":rebuildFailed", { url: url, status: response.status, message: e && e.message });
+              return response;
             }
           }).catch(function (err) {
             console.log("[RLB hook] " + tag + " original read failed:", err && err.name);
