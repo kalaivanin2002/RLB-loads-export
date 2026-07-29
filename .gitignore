@@ -1,0 +1,11 @@
+# Build output (regenerate with scripts\package.ps1)
+dist/
+rlb-load-search.zip
+
+# Never commit real driver exports or shift schedules. These are personal data;
+# a copy previously sat in the repo root and would have shipped inside the CRX,
+# which is world-readable once published.
+drivers.json
+driver_schedule.json
+*_schedule.json
+fixtures/
