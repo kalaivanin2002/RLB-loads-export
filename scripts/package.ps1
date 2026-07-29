@@ -53,7 +53,24 @@ $manifest = Get-Content (Join-Path $dist "manifest.json") -Raw | ConvertFrom-Jso
 Write-Output ("manifest OK - " + $manifest.name + " v" + $manifest.version)
 Write-Output ("permissions: " + ($manifest.permissions -join ", "))
 
-Compress-Archive -Path (Join-Path $dist "*") -DestinationPath $zip -Force
+# Build the archive entry-by-entry rather than with Compress-Archive. PowerShell
+# 5.1 writes BACKSLASH separators for nested paths (icons\icon16.png), which the
+# ZIP spec forbids - entry names must use forward slashes. Chrome then cannot
+# resolve the icons/ paths the manifest references and rejects the upload.
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+$archive = [System.IO.Compression.ZipFile]::Open($zip, [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+    foreach ($f in $SHIP) {
+        $src = Join-Path $root $f
+        if (-not (Test-Path $src)) { continue }
+        $entryName = $f -replace '\\', '/'
+        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $src, $entryName) | Out-Null
+    }
+} finally {
+    $archive.Dispose()
+}
 
 $shipped = Get-ChildItem $dist -Recurse -File
 $zipKb = [math]::Round((Get-Item $zip).Length / 1KB, 1)
