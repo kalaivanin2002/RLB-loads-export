@@ -1557,9 +1557,10 @@
     });
   }
 
-  // Pace between rounds — firing search after search back-to-back with no gap
-  // reads as automated traffic and is what got the account flagged. A plain
-  // human pause between locations is cheap insurance against that.
+  // Rate-limit ourselves between rounds: at most one board search per 30s.
+  // Relay is a third-party service we don't operate, so we keep our request
+  // volume proportionate to what a single dispatcher working through these
+  // locations by hand would generate, rather than issuing them back-to-back.
   var ROUND_DELAY_MS = 30000;
 
   // Run every city's round, pacing ROUND_DELAY_MS between each one.
