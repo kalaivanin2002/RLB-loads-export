@@ -1776,8 +1776,13 @@ async function buildScheduleAvailability(tabId, cfg) {
     const rowLoc = scheduleRowCoords(r);
     const apiLocation = rowLoc ? { city: rowLoc.city || null, latitude: rowLoc.latitude, longitude: rowLoc.longitude } : null;
 
-    // Free AFTER the shift ends. If the shift already ended, they're free now.
-    const effFreeStart = Math.max(endMs, 0);
+    // Free AFTER the shift ends. If the shift already ended, they're free now —
+    // clamp to `now`, NOT to 0: an epoch timestamp is always greater than 0, so
+    // Math.max(endMs, 0) never clamped anything. That left a driver whose shift
+    // ended days ago anchored to that stale time, making their latest-pickup bound
+    // (free + maxWaitHours) sit in the past, so every current load was dropped for
+    // timing and the driver silently matched nothing.
+    const effFreeStart = Math.max(endMs, now);
     out.push({
       driver: { id: null, staticDriverId: null, name: name, phoneNumber: null, email: null },
       lastTripId: null,

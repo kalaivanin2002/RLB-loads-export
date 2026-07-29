@@ -2249,10 +2249,15 @@
     }).join("");
     var pc = info.pickup && info.pickup.city, dc = info.dropoff && info.dropoff.city;
     // Short column headers so the numbers read clearly: empty miles to pickup, miles
-    // the delivery leaves them from start, hours until pickup, the 0–100 fit score.
+    // the delivery leaves them from start, how long the driver waits between coming
+    // free and the load's pickup time, the 0–100 fit score.
+    // "Wait", not "Pickup": the value is a clock gap (freeAtEffective → firstPickupTime),
+    // not a distance or a place. It does NOT move with deadhead — two drivers 0mi and
+    // 15mi out who come free at the same moment wait the same time; the far one just
+    // spends more of it driving. "Pickup" read like a location/distance and confused that.
     var head =
       "<thead><tr><th>Driver</th><th>Deadhead</th><th>Return</th>" +
-      "<th>Pickup</th><th>Fit</th></tr></thead>";
+      "<th>Wait</th><th>Fit</th></tr></thead>";
     t.innerHTML =
       '<div class="h">£' + (info.payout != null ? Math.round(info.payout) : "—") + " · " + esc(pc) + " → " + esc(dc) +
       " · " + esc(info.workType === "ROUND_TRIP" ? "Round trip" : info.workType === "ONE_WAY" ? "One-way" : info.workType || "") + "</div>" +
