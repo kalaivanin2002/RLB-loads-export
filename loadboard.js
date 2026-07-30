@@ -998,7 +998,18 @@
 
   // How far around the origin to search (miles). "New search" resets this to
   // Relay's own default (50), so every round has to re-select it, same as Equipment.
+  //
+  // The MAIN round casts a wide 250mi net around the configured Search Location.
+  // OVERFLOW rounds are different: their origin is one specific out-of-range driver
+  // group, and a 250mi net there would drag back loads hundreds of miles from those
+  // drivers (and overlap the main round's area). They get a tight 50mi radius so the
+  // results are actually local to the group — see roundRadiusMi.
   var SEARCH_RADIUS_MI = 250;
+  var OVERFLOW_RADIUS_MI = 50;
+
+  // Radius for the round currently being filled. Set by runAutoRound before
+  // fillBatch runs, because Relay re-fires its own search as each filter changes.
+  var activeRadiusMi = SEARCH_RADIUS_MI;
 
   function radiusBox() {
     return document.getElementById("rlb-origin-radius-filter");
@@ -1036,7 +1047,7 @@
     var box = radiusBox();
     if (!box) return Promise.reject(new Error("radius box not found"));
     realClick(box);
-    return waitFor(function () { return findRadiusOption(SEARCH_RADIUS_MI) || radiusListbox(); }, 1500, 100);
+    return waitFor(function () { return findRadiusOption(activeRadiusMi) || radiusListbox(); }, 1500, 100);
   }
 
   // Unlike the origin/equipment popovers (which close on an outside mousedown —
@@ -1117,20 +1128,21 @@
     });
   }
 
-  // "New search" leaves Radius at Relay's default (50) — force it to
-  // SEARCH_RADIUS_MI every round, same reasoning as setEquipment above.
+  // "New search" leaves Radius at Relay's default (50) — force it to this round's
+  // radius (activeRadiusMi) every round, same reasoning as setEquipment above.
   function setRadius() {
-    if (currentRadius() === SEARCH_RADIUS_MI) return Promise.resolve(); // already correct
+    var want = activeRadiusMi;
+    if (currentRadius() === want) return Promise.resolve(); // already correct
     return openRadius().then(function () {
-      var opt = findRadiusOption(SEARCH_RADIUS_MI);
-      if (!opt) { console.log("[RLB fill] radius option " + SEARCH_RADIUS_MI + " not found"); return; }
+      var opt = findRadiusOption(want);
+      if (!opt) { console.log("[RLB fill] radius option " + want + " not found"); return; }
       realClick(opt);
       return delay(300);
     }).then(function () {
       return closeRadiusPopover();
     }).then(function () {
-      if (currentRadius() !== SEARCH_RADIUS_MI) {
-        console.log("[RLB fill] radius shows " + currentRadius() + " after selecting " + SEARCH_RADIUS_MI + " — leaving as-is");
+      if (currentRadius() !== want) {
+        console.log("[RLB fill] radius shows " + currentRadius() + " after selecting " + want + " — leaving as-is");
       }
     }).catch(function (e) {
       console.log("[RLB fill] radius select failed:", e && e.message);
@@ -1675,13 +1687,19 @@
     });
   }
 
-  // Rate-limit ourselves between rounds: at most one board search per 30s.
+  // Rate-limit ourselves between rounds: at most one board search per ~5-15s.
   // Relay is a third-party service we don't operate, so we keep our request
   // volume proportionate to what a single dispatcher working through these
   // locations by hand would generate, rather than issuing them back-to-back.
-  var ROUND_DELAY_MS = 30000;
+  // Randomised within the range (rather than a fixed interval) so the pacing
+  // doesn't look like a bot firing on a metronome.
+  var ROUND_DELAY_MIN_MS = 5000;
+  var ROUND_DELAY_MAX_MS = 15000;
+  function nextRoundDelayMs() {
+    return ROUND_DELAY_MIN_MS + Math.floor(Math.random() * (ROUND_DELAY_MAX_MS - ROUND_DELAY_MIN_MS + 1));
+  }
 
-  // Run every city's round, pacing ROUND_DELAY_MS between each one.
+  // Run every city's round, pacing a randomised delay between each one.
   // showRoundResult overwrites the card with each round's own result as it
   // completes; once the last one is done, append a summary noting every
   // location that was searched (each has its own Load Board search tab by then).
@@ -1689,13 +1707,21 @@
     return runAutoRound(steps).then(function () {
       if (roundIdx + 1 >= batches.length) {
         if (cities.length > 1) announceOtherRounds(cities);
+        // The run is over, but the user keeps browsing: switching between the
+        // per-location search tabs (or paginating) fires a fresh search, which
+        // re-scores. Those searches are no longer tied to the last round, so drop
+        // its driver scoping — otherwise the Plymouth tab would keep being scored
+        // against only Dunfermline's drivers. Back to the whole fleet.
+        roundDriverNames = null;
+        activeRadiusMi = SEARCH_RADIUS_MI;
         return;
       }
       roundIdx++;
       var nextSteps = autopilotSteps(true);
-      nextSteps[2].label = "Waiting " + Math.round(ROUND_DELAY_MS / 1000) + "s before the next search…";
+      var waitMs = nextRoundDelayMs();
+      nextSteps[2].label = "Waiting " + Math.round(waitMs / 1000) + "s before the next search…";
       renderSteps(nextSteps);
-      return delay(ROUND_DELAY_MS).then(function () {
+      return delay(waitMs).then(function () {
         return runAllRounds(nextSteps, cities);
       });
     });
@@ -1732,6 +1758,9 @@
     // so a score can land before fillBatch's promise resolves.
     var plan = roundPlan[roundIdx] || null;
     roundDriverNames = (plan && plan.drivers) || null;
+    // Overflow rounds search a tight radius around that group; the main round keeps
+    // the wide net. Set before fillBatch — setRadius reads it as it drives the form.
+    activeRadiusMi = plan && plan.overflow ? OVERFLOW_RADIUS_MI : SEARCH_RADIUS_MI;
     steps[2].state = "active";
     steps[2].label = "Searching loads near " + cities.join(", ") +
       (plan && plan.overflow ? " (out of range — " + plan.drivers.length + " driver(s))" : "") +
@@ -1752,6 +1781,21 @@
 
   function countHighlighted() { return document.querySelectorAll("[data-rlb-match]").length; }
 
+  // The origin city/cities the CURRENTLY VISIBLE search tab is using, read from the
+  // live form (Relay swaps the form's contents when you switch search tabs). Used to
+  // relabel the result card after the run, so the card describes the tab on screen
+  // rather than whichever round happened to finish last. Null if unreadable.
+  function currentOriginLabel() {
+    var txt = originBoxText();
+    if (!txt) return null;
+    // The box renders selected cities as a comma-joined string, e.g.
+    // "Plymouth, UK" or "Gateshead, UK, Durham, UK" — strip the country suffixes
+    // so it reads like the round labels the card uses elsewhere.
+    var parts = txt.split(",").map(function (s) { return s.trim(); })
+      .filter(function (s) { return s && !/^(uk|gb|gbr|united kingdom)$/i.test(s); });
+    return parts.length ? parts.join(", ") : null;
+  }
+
   // Keep the result card's number in sync with what's actually highlighted — so
   // paginating (a fresh score for the new page) updates the count and the
   // "Show matches" step-through targets the current page. No-op mid-run.
@@ -1765,6 +1809,15 @@
     if (res && res.classList) res.classList.toggle("zero", n === 0);
     var lbl = document.querySelector("#rlb-card .result .lbl");
     if (lbl) lbl.textContent = n === 1 ? "load matches your drivers" : "loads match your drivers";
+    // The "Location 3 of 3 · Dunfermline" line names the round that produced this
+    // count. Once the run is over the user can switch search tabs, which re-scores
+    // against whatever that tab is showing — so the old round label no longer
+    // describes it. Replace it with the origin the visible tab is actually using.
+    var rnd = document.querySelector("#rlb-card .result .rnd");
+    if (rnd) {
+      var shown = currentOriginLabel();
+      rnd.textContent = shown ? shown : "";
+    }
     // NOTE: do NOT reset matchPos here — this runs on every repaint (incl. the
     // repaint caused by flashing a match), which would keep "Show matches" stuck.
     var step = document.getElementById("rlb-a-step");
