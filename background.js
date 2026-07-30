@@ -1627,7 +1627,7 @@ async function refreshAvailabilityOnly(carrierCode, carrierType) {
   let availability, source = "schedule-api", apiError = null, notRegistered = false;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
-    if (!availability.length) throw new Error("shifts API returned no drivers");
+    if (!availability.length) throw new Error("API returned no drivers");
     console.log("[RLB availability] ✓ shifts API OK — " + availability.length + " driver(s) via schedule-api.");
   } catch (e) {
     await logError("background/refreshAvailabilityOnly/schedule", e);
@@ -1689,7 +1689,7 @@ async function refreshUnassignedDriversOnly(carrierCode, carrierType) {
   let availability, source = "schedule-api", apiError = null, notRegistered = false;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
-    if (!availability.length) throw new Error("shifts API returned no drivers");
+    if (!availability.length) throw new Error("API returned no drivers");
     console.log("[RLB availability] ✓ shifts API OK (unassigned) — " + availability.length + " driver(s) via schedule-api.");
   } catch (e) {
     await logError("background/refreshUnassignedDriversOnly/schedule", e);

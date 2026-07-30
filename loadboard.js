@@ -773,25 +773,75 @@
   // the origin dropdown / equipment popover.
   function clickOutside() {
     var el = document.documentElement;
+    // Aim the synthetic click at a real, empty spot near the bottom-left of the
+    // viewport. These popovers decide "was this click inside me?" by hit-testing
+    // the event coordinates against their own rect, and a MouseEvent with no
+    // clientX/clientY defaults to (0,0) — the top-left corner, which some of
+    // Relay's popovers (the date calendar in particular) can still overlap.
+    // A point well away from the filter row reads as genuinely outside.
+    var x = 8;
+    var y = Math.max(8, (window.innerHeight || 800) - 8);
     ["pointerdown", "mousedown", "mouseup", "click"].forEach(function (t) {
-      try { el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+      try {
+        el.dispatchEvent(new MouseEvent(t, {
+          bubbles: true, cancelable: true, view: window, clientX: x, clientY: y,
+        }));
+      } catch (e) {}
     });
   }
 
   // Close any open combobox/popover (origin dropdown, equipment popover) so it
   // can't swallow the next click or cover the Search button.
+  // Anything still floating over the form: the equipment popover, the origin
+  // suggestion list, the radius listbox, or the date calendar. The first two were
+  // the only ones checked originally, so a stuck radius/date popover was reported
+  // as closed and left on screen (and could swallow the Search click).
+  function openOverlay() {
+    if (document.querySelector('[role="checkbox"][id="REQUIRED"]')) return "equipment";
+    if (bestOption("")) return "origin";
+    var rb = radiusBox();
+    if (rb && rb.getAttribute("aria-expanded") === "true") return "radius";
+    var rl = radiusListbox();
+    if (rl && isVisible(rl)) return "radius";
+    // The date pickers are plain masked inputs with a calendar popover; it has no
+    // stable id, so key off an expanded date combobox or a visible grid/dialog.
+    var f = dateInputs();
+    var dateEls = [f.startDate, f.startTime, f.endDate, f.endTime];
+    for (var i = 0; i < dateEls.length; i++) {
+      if (dateEls[i] && dateEls[i].getAttribute("aria-expanded") === "true") return "date";
+    }
+    var grid = document.querySelector('[role="grid"],[role="dialog"] [role="grid"]');
+    if (grid && isVisible(grid)) return "date";
+    return null;
+  }
+
   function closeOverlays() {
     try {
       var oi = originInput();
       if (oi) { oi.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true })); oi.blur(); }
       clickOutside();
     } catch (e) {}
-    return delay(350).then(function () {
-      // If a popover is still open, one more outside click.
-      if (document.querySelector('[role="checkbox"][id="REQUIRED"]') || bestOption("")) {
+    // Retry a few times: each pass Escapes the focused field (the date calendar
+    // closes on Escape even though the MDN popovers don't) and clicks outside.
+    var chain = delay(350);
+    for (var pass = 0; pass < 3; pass++) {
+      chain = chain.then(function () {
+        var which = openOverlay();
+        if (!which) return null;
+        try {
+          var ae = document.activeElement;
+          if (ae && ae.dispatchEvent) {
+            ae.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+            if (ae.blur) ae.blur();
+          }
+        } catch (e) {}
         clickOutside();
         return delay(300);
-      }
+      });
+    }
+    return chain.then(function () {
+      var left = openOverlay();
+      if (left) console.log("[RLB fill] " + left + " popover still open after close attempts");
     });
   }
 
@@ -1119,11 +1169,19 @@
         el.focus();
         nativeSetValue(el, val);
         el.dispatchEvent(new Event("change", { bubbles: true }));
+        // Focusing a date field pops its calendar open, and blur() alone doesn't
+        // always dismiss it — Escape does. Without this the calendar can sit over
+        // the results (and the Search button) for the rest of the round.
+        el.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
         el.blur();
         return delay(150); // let Relay's masked input re-render before the next field
       });
     });
-    return chain.catch(function (e) {
+    return chain.then(function () {
+      // Belt and braces: if a calendar is still mounted after the last field,
+      // click well away from the filter row to dismiss it.
+      if (openOverlay() === "date") { clickOutside(); return delay(250); }
+    }).catch(function (e) {
       console.log("[RLB fill] date range fill failed:", e && e.message);
     });
   }
@@ -1145,7 +1203,11 @@
         console.log("[RLB fill] radius shows " + currentRadius() + " after selecting " + want + " — leaving as-is");
       }
     }).catch(function (e) {
+      // openRadius() may have opened the listbox before failing (e.g. its waitFor
+      // timed out). Without this the popover stays on screen for the rest of the
+      // round and can cover the Search button.
       console.log("[RLB fill] radius select failed:", e && e.message);
+      return closeRadiusPopover().catch(function () {});
     });
   }
 
@@ -1825,13 +1887,13 @@
     // non-technical message instead of the generic API-failure text below.
     if (lastNotRegistered) {
       return '<div class="note fallback">It looks like you’re not registered with FleetYes yet. ' +
-        "Showing drivers read from Relay trips instead, searched from each driver’s own location.</div>";
+        "Showing drivers read from Relay trips instead.</div>";
     }
     return (
       '<div class="note fallback">⚠ Driver shifts unavailable' +
       (lastApiError ? " (" + esc(lastApiError) + ")" : "") +
-      " — likely no drivers set up for this carrier in FleetYes, or the carrier isn’t registered yet. " +
-      "Showing drivers read from Relay trips instead, searched from each driver’s own location.</div>"
+      " likely no drivers set up for this carrier in FleetYes." +
+      "Showing drivers read from Relay trips instead.</div>"
     );
   }
 
