@@ -721,6 +721,9 @@
   // a separate Chrome browser tab), switchable via the chips at the top of the
   // search panel.
   var batches = [];   // [[{city,country}], [{city,country}], …] — one city per round
+  // Parallel to `batches`, same index: the round descriptor from buildRoundPlan
+  // (city, drivers, overflow). Carries which drivers each round is scored against.
+  var roundPlan = [];
   var roundIdx = 0;
   var autofillBusy = false;
   var lastMode = "all"; // "all" (runAutopilot) or "unassigned" (runUnassignedDriversAutopilot) — which one Advanced → Refresh drivers should re-run
@@ -1284,7 +1287,7 @@
       var fl = a.freeLocation || {};
       if (fl.latitude == null || fl.longitude == null || !fl.city) return; // unplaceable
       var key = String(fl.city).toLowerCase().trim();
-      if (!byCity[key]) byCity[key] = { city: fl.city, country: fl.country || null, drivers: [], soonest: Infinity };
+      if (!byCity[key]) byCity[key] = { city: fl.city, country: fl.country || null, latitude: fl.latitude, longitude: fl.longitude, drivers: [], soonest: Infinity };
       byCity[key].drivers.push(a.driver && a.driver.name);
       var t = Date.parse(a.freeAtEffective || a.freeAt || 0);
       if (!isNaN(t) && t < byCity[key].soonest) byCity[key].soonest = t;
@@ -1294,8 +1297,114 @@
     return cities;
   }
 
+  // Straight-line miles between two lat/lng points. Mirrors haversineMiles in
+  // background.js — duplicated rather than messaged across because the round plan
+  // is built here, synchronously, before any search fires.
+  function milesBetween(lat1, lon1, lat2, lon2) {
+    if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return null;
+    var R = 3958.7613;
+    var toRad = function (d) { return (d * Math.PI) / 180; };
+    var dLat = toRad(lat2 - lat1);
+    var dLon = toRad(lon2 - lon1);
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  // Drivers whose own location sits within SEARCH_RADIUS_MI of the configured
+  // Search Location are already covered by the main round's 250mi net. Anyone
+  // further out is not reachable from it at all, so they need their own search
+  // originating from where they actually are.
+  //
+  // Overflow locations are grouped so that one search covers several nearby
+  // drivers: distinct by city name first, then any two groups whose origins are
+  // within OVERFLOW_GROUP_MI collapse into one (the "Manchester North / Manchester
+  // South" case). Each group is scored ONLY against its own drivers — see the
+  // driverNames plumbing in scoreLoadsForPage.
+  //
+  // Returns [mainRound, ...overflowRounds]; the main round is always first and
+  // always present, and carries drivers:null meaning "score the whole fleet".
+  var OVERFLOW_GROUP_MI = 50;
+
+  function buildRoundPlan(list) {
+    var main = buildCityList(list); // every driver shares freeLocation = Search Location
+    if (!main.length) return [];
+
+    // The Search Location itself — the origin the main round searches from.
+    var origin = main[0];
+    var rounds = [{
+      city: origin.city,
+      country: origin.country || null,
+      drivers: null,        // null → score against every driver
+      overflow: false,
+      soonest: origin.soonest,
+    }];
+
+    // Bucket out-of-range drivers by their OWN location (apiLocation), not
+    // freeLocation — freeLocation is the shared Search Location for all of them.
+    var groups = [];
+    list.forEach(function (a) {
+      var al = a.apiLocation || {};
+      if (al.latitude == null || al.longitude == null) return; // unplaceable → main round only
+      var d = milesBetween(origin.latitude, origin.longitude, al.latitude, al.longitude);
+      if (d == null || d <= SEARCH_RADIUS_MI) return;          // already covered by the main round
+
+      var name = a.driver && a.driver.name;
+      var t = Date.parse(a.freeAtEffective || a.freeAt || 0);
+      var cityKey = String(al.city || "").toLowerCase().trim();
+
+      // Reuse an existing group when it's the same city, or when its origin is
+      // close enough that one 250mi search covers this driver too.
+      for (var i = 0; i < groups.length; i++) {
+        var g = groups[i];
+        var near = milesBetween(g.latitude, g.longitude, al.latitude, al.longitude);
+        if ((cityKey && g.key === cityKey) || (near != null && near <= OVERFLOW_GROUP_MI)) {
+          g.drivers.push(name);
+          g.miles = Math.max(g.miles, Math.round(d));
+          if (!isNaN(t) && t < g.soonest) g.soonest = t;
+          return;
+        }
+      }
+      groups.push({
+        key: cityKey,
+        city: al.city || null,
+        country: al.country || null,
+        latitude: al.latitude,
+        longitude: al.longitude,
+        drivers: [name],
+        miles: Math.round(d),
+        soonest: isNaN(t) ? Infinity : t,
+        overflow: true,
+      });
+    });
+
+    // A group with no resolvable city name can't be typed into Relay's origin box,
+    // so it can't be searched — drop it rather than fail the round.
+    groups = groups.filter(function (g) {
+      if (g.city) return true;
+      console.log("[RLB rounds] skipping out-of-range group with no city name (" + g.drivers.length + " driver(s))");
+      return false;
+    });
+    groups.sort(function (a, b) { return a.soonest - b.soonest; });
+
+    if (groups.length) {
+      console.log(
+        "[RLB rounds] " + groups.length + " overflow location(s) beyond " + SEARCH_RADIUS_MI + "mi of " +
+        origin.city + ": " + groups.map(function (g) {
+          return g.city + " (" + g.miles + "mi, " + g.drivers.length + " driver(s))";
+        }).join(", ")
+      );
+    }
+    return rounds.concat(groups);
+  }
+
   // ── autopilot: fetch drivers → search a batch → show matches → pause ────────────
   var scoreResolvers = [];          // resolved by scoreAndPaint when a score completes
+  // Driver names the CURRENT round should be scored against, or null for the whole
+  // fleet. Set per round by runAutoRound; every score fired while that round's
+  // results are on screen (including the user paginating the board afterwards)
+  // uses it, so an overflow round's loads never get matched to the whole fleet.
+  var roundDriverNames = null;
   var matchList = [], matchPos = 0; // for stepping through highlighted loads
   var STALE_MS = 6 * 3600 * 1000;   // driver data older than this gets a "refresh?" nudge
   function isStale(at) { return !at || (Date.now() - at > STALE_MS); }
@@ -1465,6 +1574,7 @@
     if (autofillBusy) return;
     autofillBusy = true;
     lastMode = "all";
+    roundDriverNames = null; // clear any previous run's overflow scoping
     showCard();
     setLaunchBusy(true);
     var steps = autopilotSteps(false);
@@ -1478,7 +1588,7 @@
         if (lastDriverErrorConfig) {
           // Missing settings (carrier code / token / search location) — point the
           // user straight at settings, not the Trips page.
-          cardError("Setup needed", lastDriverError + " Open the extension popup to configure it, then try again.");
+          cardError("Setup needed", lastDriverError + " Configure it in the FleetYes RLB settings, then try again.");
         } else if (lastNotRegistered) {
           cardError("No drivers found.", "It looks like you’re not registered with FleetYes yet, and we couldn’t find any trips on this Relay page either. Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers.");
         } else {
@@ -1493,10 +1603,13 @@
       // still reflects how those drivers were actually obtained.
       if (meta.source) lastAvailabilitySource = meta.source;
       return getAvailability().then(function (list) {
-        var cities = buildCityList(list);
+        // Main round (the configured Search Location, scored against everyone) plus
+        // one round per group of drivers sitting beyond the 250mi search radius.
+        var cities = buildRoundPlan(list);
         if (!cities.length) { cardError("No drivers to search from.", "None of your drivers had a usable drop-off location (Advanced → View drivers)."); return null; }
 
         batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
+        roundPlan = cities;
         roundIdx = 0;
         // If the shifts API failed and we're on the Relay-trips fallback, surface the
         // reason on the card NOW — before the fallback searches start — so the user
@@ -1526,6 +1639,7 @@
     if (autofillBusy) return;
     autofillBusy = true;
     lastMode = "unassigned";
+    roundDriverNames = null; // unassigned mode always scores the whole unassigned list
     showCard();
     setLaunchBusy(true);
     var steps = autopilotSteps(false);
@@ -1545,6 +1659,10 @@
         if (!cities.length) { cardError("No unassigned drivers to search from.", "None of the unassigned drivers had a resolvable domicile city."); return null; }
 
         batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
+        // Unassigned drivers keep the existing one-round-per-domicile behaviour (no
+        // overflow grouping): their apiLocation is a domicile stand-in, not a real
+        // drop-off. Reset roundPlan so a prior ⚡ run's driver groups can't leak in.
+        roundPlan = [];
         roundIdx = 0;
         return runAllRounds(steps, cities);
       });
@@ -1589,10 +1707,19 @@
   function announceOtherRounds(cities) {
     var host = document.getElementById("rlb-card-content");
     if (!host) return;
+    // Overflow rounds are the extra searches run for drivers too far from the
+    // Search Location to be covered by its 250mi net — call them out separately so
+    // the tabs aren't mistaken for duplicates of the main search.
+    var extra = cities.filter(function (c) { return c && c.overflow; });
     var html =
-      '<div class="note">Searched ' + cities.length + " driver locations (" +
-      esc(cities.map(function (c) { return c.city; }).join(", ")) +
-      ") — each has its own “New search” tab at the top of the page. Switch tabs to see each one’s matches.</div>";
+      '<div class="note">Searched ' + cities.length + " location" + (cities.length === 1 ? "" : "s") + " (" +
+      esc(cities.map(function (c) { return c.city; }).join(", ")) + ")" +
+      (extra.length
+        ? " — " + extra.length + " of them for driver" + (extra.length === 1 ? "" : "s") +
+          " more than " + SEARCH_RADIUS_MI + " miles from " + esc(cities[0].city) +
+          " (" + esc(extra.map(function (c) { return c.city; }).join(", ")) + ")"
+        : "") +
+      ". Each has its own “New search” tab at the top of the page. Switch tabs to see each one’s matches.</div>";
     var adv = host.querySelector(".adv");
     if (adv) adv.insertAdjacentHTML("beforebegin", html);
     else host.insertAdjacentHTML("beforeend", html);
@@ -1600,8 +1727,14 @@
 
   function runAutoRound(steps) {
     var cities = batches[roundIdx].map(function (b) { return b.city; });
+    // Scope this round's scoring to its own driver group (null on the main round).
+    // Must be set BEFORE fillBatch: Relay auto-fires a search as the filters change,
+    // so a score can land before fillBatch's promise resolves.
+    var plan = roundPlan[roundIdx] || null;
+    roundDriverNames = (plan && plan.drivers) || null;
     steps[2].state = "active";
     steps[2].label = "Searching loads near " + cities.join(", ") +
+      (plan && plan.overflow ? " (out of range — " + plan.drivers.length + " driver(s))" : "") +
       (batches.length > 1 ? " (" + (roundIdx + 1) + " of " + batches.length + ")" : "");
     steps[3].state = "pending";
     renderSteps(steps);
@@ -1825,7 +1958,7 @@
     lastLoads = loads;
     setPanel("rlb-seen", String(loads.length));
     try {
-      chrome.runtime.sendMessage({ type: "score-loads", loads: loads, mode: lastMode }, function (res) {
+      chrome.runtime.sendMessage({ type: "score-loads", loads: loads, mode: lastMode, driverNames: roundDriverNames }, function (res) {
         if (chrome.runtime.lastError || !res || !res.ok) {
           logError("scoreAndPaint", (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "score-loads failed");
           resolveScores(null); // unblock the autopilot even on failure
