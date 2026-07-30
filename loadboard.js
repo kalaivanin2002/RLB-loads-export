@@ -1701,12 +1701,11 @@
 
   // Run every city's round, pacing a randomised delay between each one.
   // showRoundResult overwrites the card with each round's own result as it
-  // completes; once the last one is done, append a summary noting every
-  // location that was searched (each has its own Load Board search tab by then).
+  // completes. The searched locations are already visible as the page's own
+  // "New search" tabs, so the card doesn't restate them.
   function runAllRounds(steps, cities) {
     return runAutoRound(steps).then(function () {
       if (roundIdx + 1 >= batches.length) {
-        if (cities.length > 1) announceOtherRounds(cities);
         // The run is over, but the user keeps browsing: switching between the
         // per-location search tabs (or paginating) fires a fresh search, which
         // re-scores. Those searches are no longer tied to the last round, so drop
@@ -1725,30 +1724,6 @@
         return runAllRounds(nextSteps, cities);
       });
     });
-  }
-
-  // Append a note to the (already-shown) final round's result card listing
-  // every location searched, without disturbing the match results / buttons
-  // showRoundResult already rendered and wired up.
-  function announceOtherRounds(cities) {
-    var host = document.getElementById("rlb-card-content");
-    if (!host) return;
-    // Overflow rounds are the extra searches run for drivers too far from the
-    // Search Location to be covered by its 250mi net — call them out separately so
-    // the tabs aren't mistaken for duplicates of the main search.
-    var extra = cities.filter(function (c) { return c && c.overflow; });
-    var html =
-      '<div class="note">Searched ' + cities.length + " location" + (cities.length === 1 ? "" : "s") + " (" +
-      esc(cities.map(function (c) { return c.city; }).join(", ")) + ")" +
-      (extra.length
-        ? " — " + extra.length + " of them for driver" + (extra.length === 1 ? "" : "s") +
-          " more than " + SEARCH_RADIUS_MI + " miles from " + esc(cities[0].city) +
-          " (" + esc(extra.map(function (c) { return c.city; }).join(", ")) + ")"
-        : "") +
-      ". Each has its own “New search” tab at the top of the page. Switch tabs to see each one’s matches.</div>";
-    var adv = host.querySelector(".adv");
-    if (adv) adv.insertAdjacentHTML("beforebegin", html);
-    else host.insertAdjacentHTML("beforeend", html);
   }
 
   function runAutoRound(steps) {
@@ -1786,13 +1761,28 @@
   // relabel the result card after the run, so the card describes the tab on screen
   // rather than whichever round happened to finish last. Null if unreadable.
   function currentOriginLabel() {
-    var txt = originBoxText();
+    // Read the VALUE element, not the whole box: the box's textContent also
+    // contains the field's own caption ("Origin (5 max)*"), which would end up
+    // in the card. Fall back to the input's value if the value node isn't there.
+    var el = document.getElementById("rlb-origin-city-filter-value");
+    var txt = el ? (el.textContent || "") : "";
+    if (!txt.trim()) {
+      var input = originInput();
+      txt = (input && input.value) || "";
+    }
+    txt = txt.replace(/\s+/g, " ").trim();
+    // Strip the field caption if it ever leaks into the text we read — it sits in
+    // front of the first city with no comma between them, so filtering by segment
+    // below would take the city out with it.
+    txt = txt.replace(/^\s*origin\s*\([^)]*\)\s*\*?\s*/i, "").trim();
     if (!txt) return null;
-    // The box renders selected cities as a comma-joined string, e.g.
-    // "Plymouth, UK" or "Gateshead, UK, Durham, UK" — strip the country suffixes
-    // so it reads like the round labels the card uses elsewhere.
+    // Selected cities render comma-joined, e.g. "Plymouth, UK" or
+    // "Gateshead, UK, Durham, UK" — drop the country suffixes and any stray
+    // caption text so it reads like the round labels used elsewhere on the card.
     var parts = txt.split(",").map(function (s) { return s.trim(); })
-      .filter(function (s) { return s && !/^(uk|gb|gbr|united kingdom)$/i.test(s); });
+      .filter(function (s) {
+        return s && !/^(uk|gb|gbr|united kingdom)$/i.test(s) && !/origin|max/i.test(s);
+      });
     return parts.length ? parts.join(", ") : null;
   }
 
