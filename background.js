@@ -840,7 +840,11 @@ async function fetchDriverSchedule(cfg) {
   try { data = JSON.parse(text); } catch (e) { throw new Error("active-driver-shifts response was not JSON"); }
   // Tolerant to the top-level array key (drivers / shifts / data / …).
   const rows = extractEntries(data);
-  return Array.isArray(rows) ? rows : [];
+  // meta.timezone tells us what zone start_date/start_time/end_date/end_time are
+  // expressed in (see parseLocalMsInZone below). Older API responses without a
+  // meta block fall back to Europe/London, the zone this was always written for.
+  const timezone = (data && data.meta && data.meta.timezone) || "Europe/London";
+  return { rows: Array.isArray(rows) ? rows : [], timezone: timezone };
 }
 
 // Pull a driver's END location { latitude, longitude } out of a schedule row —
@@ -865,7 +869,10 @@ function scheduleRowCoords(r) {
     }
   }
   if (lat == null || lon == null) return null;
-  const city = r.end_city || r.city || (r.location && r.location.city) || null;
+  // shift.end_location_name is the server-resolved place name (from the driver's
+  // matched clock-in/out place or reverse geocode) — prefer it over the flatter
+  // end_city/city fallbacks, and over our own reverseGeocode() call below.
+  const city = (r.shift && r.shift.end_location_name) || r.end_city || r.city || (r.location && r.location.city) || null;
   return { latitude: lat, longitude: lon, city: city };
 }
 
@@ -901,28 +908,31 @@ async function reverseGeocode(lat, lon) {
   }
 }
 
-// Parse "YYYY-MM-DD" + "HH:MM" as UK local time → epoch ms. Relay/UK operates in
-// Europe/London, and the schedule times are wall-clock UK, so we anchor them to
-// that zone (handles BST/GMT) rather than the worker's own timezone.
-function parseUkLocalMs(dateStr, timeStr) {
+// Parse "YYYY-MM-DD" + "HH:MM" as wall-clock time IN THE GIVEN IANA ZONE →
+// epoch ms. The schedule API reports which zone its date/time fields are
+// expressed in via meta.timezone (see fetchDriverSchedule) — that's the value
+// callers should pass here, NOT a hardcoded zone. Handles DST correctly for
+// any zone Intl knows about, not just Europe/London.
+function parseLocalMsInZone(dateStr, timeStr, tz) {
   if (!dateStr || !timeStr) return null;
   const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr).trim());
   const tm = /^(\d{1,2}):(\d{2})$/.exec(String(timeStr).trim());
   if (!dm || !tm) return null;
   const y = +dm[1], mo = +dm[2], d = +dm[3], hh = +tm[1], mi = +tm[2];
-  // Start from the UTC interpretation, then correct by the Europe/London offset
-  // at that instant (BST = +1, GMT = 0) so the wall-clock time lands correctly.
+  // Start from the UTC interpretation, then correct by that zone's offset at
+  // this instant (e.g. BST = +1, GMT = 0 for Europe/London; UTC is always 0)
+  // so the wall-clock time lands correctly regardless of DST.
   const naiveUtc = Date.UTC(y, mo - 1, d, hh, mi, 0);
-  const offsetMin = londonOffsetMinutes(naiveUtc);
+  const offsetMin = zoneOffsetMinutes(naiveUtc, tz || "Europe/London");
   return naiveUtc - offsetMin * 60000;
 }
 
-// Europe/London UTC offset (in minutes) for a given instant, via Intl — avoids
-// hardcoding BST/GMT switch dates.
-function londonOffsetMinutes(ms) {
+// UTC offset (in minutes) for a given instant in a given IANA zone, via Intl —
+// avoids hardcoding DST switch dates for any specific zone.
+function zoneOffsetMinutes(ms, tz) {
   try {
     const dtf = new Intl.DateTimeFormat("en-GB", {
-      timeZone: "Europe/London", hour12: false,
+      timeZone: tz, hour12: false,
       year: "numeric", month: "2-digit", day: "2-digit",
       hour: "2-digit", minute: "2-digit", second: "2-digit",
     });
@@ -963,14 +973,14 @@ async function buildScheduleAvailability(tabId, cfg) {
   const searchLocation = { city: c.name, country: c.country || null, latitude: c.latitude, longitude: c.longitude };
 
   // Then fetch the shifts (also throws config errors for missing carrier/token).
-  const rows = await fetchDriverSchedule(cfg);
+  const { rows, timezone } = await fetchDriverSchedule(cfg);
 
   const out = [];
   let noEnd = 0;
   for (const r of rows) {
     const name = (r && r.driver_name) ? String(r.driver_name).trim() : null;
     if (!name) continue;
-    const endMs = parseUkLocalMs(r.end_date, r.end_time);
+    const endMs = parseLocalMsInZone(r.end_date, r.end_time, timezone);
     if (endMs == null) { noEnd++; continue; }
 
     // The driver's OWN end location (drop-off) from the API — shown in the drivers
@@ -1000,7 +1010,7 @@ async function buildScheduleAvailability(tabId, cfg) {
       alreadyFree: !(effFreeStart > now),
       nextTripStart: null,
       freeWindowHours: null,
-      scheduleShift: { start: parseUkLocalMs(r.start_date, r.start_time), end: endMs },
+      scheduleShift: { start: parseLocalMsInZone(r.start_date, r.start_time, timezone), end: endMs },
     });
   }
   // Reverse-geocode each driver's END location (drop-off) to a city name for the
