@@ -949,7 +949,7 @@ async function buildScheduleAvailability(tabId, cfg) {
   // (config: true) so the caller surfaces them instead of falling back to Relay.
   const searchLoc = (cfg.searchLocation || "").trim();
   if (!searchLoc) {
-    const err = new Error("No Search Location set — enter one in Planning rules (settings).");
+    const err = new Error("No Search Location set.");
     err.config = true;
     throw err;
   }
@@ -1627,7 +1627,7 @@ async function refreshAvailabilityOnly(carrierCode, carrierType) {
   let availability, source = "schedule-api", apiError = null, notRegistered = false;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
-    if (!availability.length) throw new Error("shifts API returned no drivers");
+    if (!availability.length) throw new Error("API returned no drivers");
     console.log("[RLB availability] ✓ shifts API OK — " + availability.length + " driver(s) via schedule-api.");
   } catch (e) {
     await logError("background/refreshAvailabilityOnly/schedule", e);
@@ -1689,7 +1689,7 @@ async function refreshUnassignedDriversOnly(carrierCode, carrierType) {
   let availability, source = "schedule-api", apiError = null, notRegistered = false;
   try {
     availability = await buildScheduleAvailability(tab.id, cfg);
-    if (!availability.length) throw new Error("shifts API returned no drivers");
+    if (!availability.length) throw new Error("API returned no drivers");
     console.log("[RLB availability] ✓ shifts API OK (unassigned) — " + availability.length + " driver(s) via schedule-api.");
   } catch (e) {
     await logError("background/refreshUnassignedDriversOnly/schedule", e);
@@ -1722,7 +1722,12 @@ async function refreshUnassignedDriversOnly(carrierCode, carrierType) {
 
 // Score page-provided loads against stored availability → load-centric list
 // (each load with its suitable drivers). No network; pure computation.
-async function scoreLoadsForPage(loads, mode) {
+// `driverNames` scopes the scoring to one group of drivers (see buildRoundPlan in
+// loadboard.js). Overflow rounds search FROM an out-of-range driver location, so
+// their loads are hundreds of miles from the configured Search Location — scoring
+// them against the whole fleet would match drivers who could never reach them.
+// null/absent means "score every driver", which is what the main round does.
+async function scoreLoadsForPage(loads, mode, driverNames) {
   const cfg = await getConfig();
   // "unassigned" mode (the U launcher) must score against the unassigned-only
   // list, not the merged assigned+unassigned plannerAvailability the ⚡ button
@@ -1735,8 +1740,19 @@ async function scoreLoadsForPage(loads, mode) {
   // empty — no fallback to the merged list, so assigned drivers can never leak
   // in. An empty list simply yields 0 matches ("no unassigned drivers").
   const useUnassigned = mode === "unassigned";
-  const availability = useUnassigned ? (stored.plannerAvailabilityUnassigned || []) : (stored.plannerAvailability || []);
+  const fullList = useUnassigned ? (stored.plannerAvailabilityUnassigned || []) : (stored.plannerAvailability || []);
   const availabilityAt = useUnassigned ? (stored.plannerAvailabilityUnassignedAt || null) : (stored.plannerAvailabilityAt || null);
+  // Restrict to this round's driver group when the caller named one. Matching is by
+  // driver name because that's the only identifier the schedule API supplies
+  // (buildScheduleAvailability leaves driver.id null), and it's what the round plan
+  // carries. An unrecognised name simply drops out — a group that matches nobody
+  // yields 0 matches rather than silently widening back to the whole fleet.
+  const wanted = Array.isArray(driverNames) && driverNames.length
+    ? new Set(driverNames.map((n) => String(n || "").toLowerCase().trim()).filter(Boolean))
+    : null;
+  const availability = wanted
+    ? fullList.filter((a) => wanted.has(String((a.driver && a.driver.name) || "").toLowerCase().trim()))
+    : fullList;
   if (!availability.length) return { ok: true, drivers: 0, loads: [], availabilityAt: availabilityAt };
   const response = { workOpportunities: Array.isArray(loads) ? loads : [] };
   const perDriver = [];
@@ -1784,7 +1800,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // keep the channel open for the async response
   }
   if (msg.type === "score-loads") {
-    scoreLoadsForPage(msg.loads || [], msg.mode)
+    scoreLoadsForPage(msg.loads || [], msg.mode, msg.driverNames || null)
       .then(sendResponse)
       .catch((e) => {
         logError("background/score-loads", e);

@@ -1,1 +1,3 @@
- If you encounter any **Book** option, button, link, or action anywhere in the workflow, do **not** click, select, interact with, or modify it under any circumstances. Always skip it and proceed with the remaining steps.
+If you encounter any **Book** option, button, link, or action anywhere in the workflow, do **not** click, select, interact with, or modify it under any circumstances. Always skip it and proceed with the remaining steps.
+
+Always write **production-ready code** that is clean, maintainable, well-structured, and follows best practices. Avoid temporary workarounds, placeholder implementations, debug code, or commented-out code unless explicitly requested. Ensure any changes are robust, thoroughly considered, and suitable for deployment.

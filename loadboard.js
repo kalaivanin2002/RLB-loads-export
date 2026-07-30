@@ -721,6 +721,9 @@
   // a separate Chrome browser tab), switchable via the chips at the top of the
   // search panel.
   var batches = [];   // [[{city,country}], [{city,country}], …] — one city per round
+  // Parallel to `batches`, same index: the round descriptor from buildRoundPlan
+  // (city, drivers, overflow). Carries which drivers each round is scored against.
+  var roundPlan = [];
   var roundIdx = 0;
   var autofillBusy = false;
   var lastMode = "all"; // "all" (runAutopilot) or "unassigned" (runUnassignedDriversAutopilot) — which one Advanced → Refresh drivers should re-run
@@ -770,25 +773,75 @@
   // the origin dropdown / equipment popover.
   function clickOutside() {
     var el = document.documentElement;
+    // Aim the synthetic click at a real, empty spot near the bottom-left of the
+    // viewport. These popovers decide "was this click inside me?" by hit-testing
+    // the event coordinates against their own rect, and a MouseEvent with no
+    // clientX/clientY defaults to (0,0) — the top-left corner, which some of
+    // Relay's popovers (the date calendar in particular) can still overlap.
+    // A point well away from the filter row reads as genuinely outside.
+    var x = 8;
+    var y = Math.max(8, (window.innerHeight || 800) - 8);
     ["pointerdown", "mousedown", "mouseup", "click"].forEach(function (t) {
-      try { el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+      try {
+        el.dispatchEvent(new MouseEvent(t, {
+          bubbles: true, cancelable: true, view: window, clientX: x, clientY: y,
+        }));
+      } catch (e) {}
     });
   }
 
   // Close any open combobox/popover (origin dropdown, equipment popover) so it
   // can't swallow the next click or cover the Search button.
+  // Anything still floating over the form: the equipment popover, the origin
+  // suggestion list, the radius listbox, or the date calendar. The first two were
+  // the only ones checked originally, so a stuck radius/date popover was reported
+  // as closed and left on screen (and could swallow the Search click).
+  function openOverlay() {
+    if (document.querySelector('[role="checkbox"][id="REQUIRED"]')) return "equipment";
+    if (bestOption("")) return "origin";
+    var rb = radiusBox();
+    if (rb && rb.getAttribute("aria-expanded") === "true") return "radius";
+    var rl = radiusListbox();
+    if (rl && isVisible(rl)) return "radius";
+    // The date pickers are plain masked inputs with a calendar popover; it has no
+    // stable id, so key off an expanded date combobox or a visible grid/dialog.
+    var f = dateInputs();
+    var dateEls = [f.startDate, f.startTime, f.endDate, f.endTime];
+    for (var i = 0; i < dateEls.length; i++) {
+      if (dateEls[i] && dateEls[i].getAttribute("aria-expanded") === "true") return "date";
+    }
+    var grid = document.querySelector('[role="grid"],[role="dialog"] [role="grid"]');
+    if (grid && isVisible(grid)) return "date";
+    return null;
+  }
+
   function closeOverlays() {
     try {
       var oi = originInput();
       if (oi) { oi.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true })); oi.blur(); }
       clickOutside();
     } catch (e) {}
-    return delay(350).then(function () {
-      // If a popover is still open, one more outside click.
-      if (document.querySelector('[role="checkbox"][id="REQUIRED"]') || bestOption("")) {
+    // Retry a few times: each pass Escapes the focused field (the date calendar
+    // closes on Escape even though the MDN popovers don't) and clicks outside.
+    var chain = delay(350);
+    for (var pass = 0; pass < 3; pass++) {
+      chain = chain.then(function () {
+        var which = openOverlay();
+        if (!which) return null;
+        try {
+          var ae = document.activeElement;
+          if (ae && ae.dispatchEvent) {
+            ae.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+            if (ae.blur) ae.blur();
+          }
+        } catch (e) {}
         clickOutside();
         return delay(300);
-      }
+      });
+    }
+    return chain.then(function () {
+      var left = openOverlay();
+      if (left) console.log("[RLB fill] " + left + " popover still open after close attempts");
     });
   }
 
@@ -906,7 +959,9 @@
   }
 
   function equipmentBox() {
-    return document.getElementById("equipment-trailer-filter");
+    // firstVisible for the same reason as radiusBox/dateInputs: previous rounds'
+    // search tabs stay mounted, so a plain id lookup can return a hidden one.
+    return firstVisible("#equipment-trailer-filter");
   }
 
   // "New search" leaves Equipment empty (0 selected) and Equipment is required, so
@@ -995,13 +1050,29 @@
 
   // How far around the origin to search (miles). "New search" resets this to
   // Relay's own default (50), so every round has to re-select it, same as Equipment.
+  //
+  // The MAIN round casts a wide 250mi net around the configured Search Location.
+  // OVERFLOW rounds are different: their origin is one specific out-of-range driver
+  // group, and a 250mi net there would drag back loads hundreds of miles from those
+  // drivers (and overlap the main round's area). They get a tight 50mi radius so the
+  // results are actually local to the group — see roundRadiusMi.
   var SEARCH_RADIUS_MI = 250;
+  var OVERFLOW_RADIUS_MI = 50;
 
+  // Radius for the round currently being filled. Set by runAutoRound before
+  // fillBatch runs, because Relay re-fires its own search as each filter changes.
+  var activeRadiusMi = SEARCH_RADIUS_MI;
+
+  // Relay keeps every previous "New search" tab's DOM mounted, so getElementById
+  // returns the FIRST (often a hidden, earlier round's) radius box — we'd then
+  // open/toggle that stale one while the visible tab's popover stayed open, which
+  // is exactly the stuck dropdown seen on round 2+. Always prefer a visible match,
+  // the same way originInput/findSearchButton already do.
   function radiusBox() {
-    return document.getElementById("rlb-origin-radius-filter");
+    return firstVisible("#rlb-origin-radius-filter");
   }
   function radiusValueEl() {
-    return document.getElementById("rlb-origin-radius-filter-value");
+    return firstVisible("#rlb-origin-radius-filter-value");
   }
   function currentRadius() {
     var el = radiusValueEl();
@@ -1033,7 +1104,7 @@
     var box = radiusBox();
     if (!box) return Promise.reject(new Error("radius box not found"));
     realClick(box);
-    return waitFor(function () { return findRadiusOption(SEARCH_RADIUS_MI) || radiusListbox(); }, 1500, 100);
+    return waitFor(function () { return findRadiusOption(activeRadiusMi) || radiusListbox(); }, 1500, 100);
   }
 
   // Unlike the origin/equipment popovers (which close on an outside mousedown —
@@ -1066,10 +1137,13 @@
   // (DD/MM/YYYY) and a time (HH:mm, 24-hour). These are their real DOM ids.
   function dateInputs() {
     return {
-      startDate: document.getElementById("rlb-start-date-filter"),
-      startTime: document.getElementById("rlb-start-time-filter"),
-      endDate: document.getElementById("rlb-end-date-filter"),
-      endTime: document.getElementById("rlb-end-time-filter"),
+      // firstVisible, not getElementById: earlier rounds' search tabs stay mounted,
+      // so a plain id lookup can hand back a hidden previous tab's input — we'd type
+      // the dates into that one and leave the visible tab's calendar open.
+      startDate: firstVisible("#rlb-start-date-filter"),
+      startTime: firstVisible("#rlb-start-time-filter"),
+      endDate: firstVisible("#rlb-end-date-filter"),
+      endTime: firstVisible("#rlb-end-time-filter"),
     };
   }
 
@@ -1105,32 +1179,45 @@
         el.focus();
         nativeSetValue(el, val);
         el.dispatchEvent(new Event("change", { bubbles: true }));
+        // Focusing a date field pops its calendar open, and blur() alone doesn't
+        // always dismiss it — Escape does. Without this the calendar can sit over
+        // the results (and the Search button) for the rest of the round.
+        el.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
         el.blur();
         return delay(150); // let Relay's masked input re-render before the next field
       });
     });
-    return chain.catch(function (e) {
+    return chain.then(function () {
+      // Belt and braces: if a calendar is still mounted after the last field,
+      // click well away from the filter row to dismiss it.
+      if (openOverlay() === "date") { clickOutside(); return delay(250); }
+    }).catch(function (e) {
       console.log("[RLB fill] date range fill failed:", e && e.message);
     });
   }
 
-  // "New search" leaves Radius at Relay's default (50) — force it to
-  // SEARCH_RADIUS_MI every round, same reasoning as setEquipment above.
+  // "New search" leaves Radius at Relay's default (50) — force it to this round's
+  // radius (activeRadiusMi) every round, same reasoning as setEquipment above.
   function setRadius() {
-    if (currentRadius() === SEARCH_RADIUS_MI) return Promise.resolve(); // already correct
+    var want = activeRadiusMi;
+    if (currentRadius() === want) return Promise.resolve(); // already correct
     return openRadius().then(function () {
-      var opt = findRadiusOption(SEARCH_RADIUS_MI);
-      if (!opt) { console.log("[RLB fill] radius option " + SEARCH_RADIUS_MI + " not found"); return; }
+      var opt = findRadiusOption(want);
+      if (!opt) { console.log("[RLB fill] radius option " + want + " not found"); return; }
       realClick(opt);
       return delay(300);
     }).then(function () {
       return closeRadiusPopover();
     }).then(function () {
-      if (currentRadius() !== SEARCH_RADIUS_MI) {
-        console.log("[RLB fill] radius shows " + currentRadius() + " after selecting " + SEARCH_RADIUS_MI + " — leaving as-is");
+      if (currentRadius() !== want) {
+        console.log("[RLB fill] radius shows " + currentRadius() + " after selecting " + want + " — leaving as-is");
       }
     }).catch(function (e) {
+      // openRadius() may have opened the listbox before failing (e.g. its waitFor
+      // timed out). Without this the popover stays on screen for the rest of the
+      // round and can cover the Search button.
       console.log("[RLB fill] radius select failed:", e && e.message);
+      return closeRadiusPopover().catch(function () {});
     });
   }
 
@@ -1143,7 +1230,7 @@
   function countOriginsSelected(cities) {
     var input = originInput();
     var box = (input && (input.closest("#rlb-origin-city-filter") || input.parentElement)) ||
-      document.getElementById("rlb-origin-city-filter");
+      firstVisible("#rlb-origin-city-filter");
     var txt = (((box && box.textContent) || "") + " " + ((input && input.value) || "")).toLowerCase();
     return cities.filter(function (c) { return txt.indexOf(String(c).toLowerCase()) !== -1; }).length;
   }
@@ -1159,7 +1246,7 @@
   function originBoxText() {
     var input = originInput();
     var box = (input && (input.closest("#rlb-origin-city-filter") || input.parentElement)) ||
-      document.getElementById("rlb-origin-city-filter");
+      firstVisible("#rlb-origin-city-filter");
     return ((box && box.textContent) || "").replace(/\s+/g, " ").trim();
   }
   function originListbox(input) {
@@ -1284,7 +1371,7 @@
       var fl = a.freeLocation || {};
       if (fl.latitude == null || fl.longitude == null || !fl.city) return; // unplaceable
       var key = String(fl.city).toLowerCase().trim();
-      if (!byCity[key]) byCity[key] = { city: fl.city, country: fl.country || null, drivers: [], soonest: Infinity };
+      if (!byCity[key]) byCity[key] = { city: fl.city, country: fl.country || null, latitude: fl.latitude, longitude: fl.longitude, drivers: [], soonest: Infinity };
       byCity[key].drivers.push(a.driver && a.driver.name);
       var t = Date.parse(a.freeAtEffective || a.freeAt || 0);
       if (!isNaN(t) && t < byCity[key].soonest) byCity[key].soonest = t;
@@ -1294,8 +1381,114 @@
     return cities;
   }
 
+  // Straight-line miles between two lat/lng points. Mirrors haversineMiles in
+  // background.js — duplicated rather than messaged across because the round plan
+  // is built here, synchronously, before any search fires.
+  function milesBetween(lat1, lon1, lat2, lon2) {
+    if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return null;
+    var R = 3958.7613;
+    var toRad = function (d) { return (d * Math.PI) / 180; };
+    var dLat = toRad(lat2 - lat1);
+    var dLon = toRad(lon2 - lon1);
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  // Drivers whose own location sits within SEARCH_RADIUS_MI of the configured
+  // Search Location are already covered by the main round's 250mi net. Anyone
+  // further out is not reachable from it at all, so they need their own search
+  // originating from where they actually are.
+  //
+  // Overflow locations are grouped so that one search covers several nearby
+  // drivers: distinct by city name first, then any two groups whose origins are
+  // within OVERFLOW_GROUP_MI collapse into one (the "Manchester North / Manchester
+  // South" case). Each group is scored ONLY against its own drivers — see the
+  // driverNames plumbing in scoreLoadsForPage.
+  //
+  // Returns [mainRound, ...overflowRounds]; the main round is always first and
+  // always present, and carries drivers:null meaning "score the whole fleet".
+  var OVERFLOW_GROUP_MI = 50;
+
+  function buildRoundPlan(list) {
+    var main = buildCityList(list); // every driver shares freeLocation = Search Location
+    if (!main.length) return [];
+
+    // The Search Location itself — the origin the main round searches from.
+    var origin = main[0];
+    var rounds = [{
+      city: origin.city,
+      country: origin.country || null,
+      drivers: null,        // null → score against every driver
+      overflow: false,
+      soonest: origin.soonest,
+    }];
+
+    // Bucket out-of-range drivers by their OWN location (apiLocation), not
+    // freeLocation — freeLocation is the shared Search Location for all of them.
+    var groups = [];
+    list.forEach(function (a) {
+      var al = a.apiLocation || {};
+      if (al.latitude == null || al.longitude == null) return; // unplaceable → main round only
+      var d = milesBetween(origin.latitude, origin.longitude, al.latitude, al.longitude);
+      if (d == null || d <= SEARCH_RADIUS_MI) return;          // already covered by the main round
+
+      var name = a.driver && a.driver.name;
+      var t = Date.parse(a.freeAtEffective || a.freeAt || 0);
+      var cityKey = String(al.city || "").toLowerCase().trim();
+
+      // Reuse an existing group when it's the same city, or when its origin is
+      // close enough that one 250mi search covers this driver too.
+      for (var i = 0; i < groups.length; i++) {
+        var g = groups[i];
+        var near = milesBetween(g.latitude, g.longitude, al.latitude, al.longitude);
+        if ((cityKey && g.key === cityKey) || (near != null && near <= OVERFLOW_GROUP_MI)) {
+          g.drivers.push(name);
+          g.miles = Math.max(g.miles, Math.round(d));
+          if (!isNaN(t) && t < g.soonest) g.soonest = t;
+          return;
+        }
+      }
+      groups.push({
+        key: cityKey,
+        city: al.city || null,
+        country: al.country || null,
+        latitude: al.latitude,
+        longitude: al.longitude,
+        drivers: [name],
+        miles: Math.round(d),
+        soonest: isNaN(t) ? Infinity : t,
+        overflow: true,
+      });
+    });
+
+    // A group with no resolvable city name can't be typed into Relay's origin box,
+    // so it can't be searched — drop it rather than fail the round.
+    groups = groups.filter(function (g) {
+      if (g.city) return true;
+      console.log("[RLB rounds] skipping out-of-range group with no city name (" + g.drivers.length + " driver(s))");
+      return false;
+    });
+    groups.sort(function (a, b) { return a.soonest - b.soonest; });
+
+    if (groups.length) {
+      console.log(
+        "[RLB rounds] " + groups.length + " overflow location(s) beyond " + SEARCH_RADIUS_MI + "mi of " +
+        origin.city + ": " + groups.map(function (g) {
+          return g.city + " (" + g.miles + "mi, " + g.drivers.length + " driver(s))";
+        }).join(", ")
+      );
+    }
+    return rounds.concat(groups);
+  }
+
   // ── autopilot: fetch drivers → search a batch → show matches → pause ────────────
   var scoreResolvers = [];          // resolved by scoreAndPaint when a score completes
+  // Driver names the CURRENT round should be scored against, or null for the whole
+  // fleet. Set per round by runAutoRound; every score fired while that round's
+  // results are on screen (including the user paginating the board afterwards)
+  // uses it, so an overflow round's loads never get matched to the whole fleet.
+  var roundDriverNames = null;
   var matchList = [], matchPos = 0; // for stepping through highlighted loads
   var STALE_MS = 6 * 3600 * 1000;   // driver data older than this gets a "refresh?" nudge
   function isStale(at) { return !at || (Date.now() - at > STALE_MS); }
@@ -1465,6 +1658,7 @@
     if (autofillBusy) return;
     autofillBusy = true;
     lastMode = "all";
+    roundDriverNames = null; // clear any previous run's overflow scoping
     showCard();
     setLaunchBusy(true);
     var steps = autopilotSteps(false);
@@ -1478,7 +1672,7 @@
         if (lastDriverErrorConfig) {
           // Missing settings (carrier code / token / search location) — point the
           // user straight at settings, not the Trips page.
-          cardError("Setup needed", lastDriverError + " Open the extension popup to configure it, then try again.");
+          cardError("Setup needed", lastDriverError + " Configure it in the FleetYes RLB settings, then try again.");
         } else if (lastNotRegistered) {
           cardError("No drivers found.", "It looks like you’re not registered with FleetYes yet, and we couldn’t find any trips on this Relay page either. Open your Trips / In-Transit page once so we can read them, then use Advanced → Refresh drivers.");
         } else {
@@ -1493,10 +1687,13 @@
       // still reflects how those drivers were actually obtained.
       if (meta.source) lastAvailabilitySource = meta.source;
       return getAvailability().then(function (list) {
-        var cities = buildCityList(list);
+        // Main round (the configured Search Location, scored against everyone) plus
+        // one round per group of drivers sitting beyond the 250mi search radius.
+        var cities = buildRoundPlan(list);
         if (!cities.length) { cardError("No drivers to search from.", "None of your drivers had a usable drop-off location (Advanced → View drivers)."); return null; }
 
         batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
+        roundPlan = cities;
         roundIdx = 0;
         // If the shifts API failed and we're on the Relay-trips fallback, surface the
         // reason on the card NOW — before the fallback searches start — so the user
@@ -1526,6 +1723,7 @@
     if (autofillBusy) return;
     autofillBusy = true;
     lastMode = "unassigned";
+    roundDriverNames = null; // unassigned mode always scores the whole unassigned list
     showCard();
     setLaunchBusy(true);
     var steps = autopilotSteps(false);
@@ -1545,6 +1743,10 @@
         if (!cities.length) { cardError("No unassigned drivers to search from.", "None of the unassigned drivers had a resolvable domicile city."); return null; }
 
         batches = cities.map(function (c) { return [{ city: c.city, country: c.country || null }]; });
+        // Unassigned drivers keep the existing one-round-per-domicile behaviour (no
+        // overflow grouping): their apiLocation is a domicile stand-in, not a real
+        // drop-off. Reset roundPlan so a prior ⚡ run's driver groups can't leak in.
+        roundPlan = [];
         roundIdx = 0;
         return runAllRounds(steps, cities);
       });
@@ -1557,51 +1759,58 @@
     });
   }
 
-  // Rate-limit ourselves between rounds: at most one board search per 30s.
+  // Rate-limit ourselves between rounds: at most one board search per ~5-15s.
   // Relay is a third-party service we don't operate, so we keep our request
   // volume proportionate to what a single dispatcher working through these
   // locations by hand would generate, rather than issuing them back-to-back.
-  var ROUND_DELAY_MS = 30000;
+  // Randomised within the range (rather than a fixed interval) so the pacing
+  // doesn't look like a bot firing on a metronome.
+  var ROUND_DELAY_MIN_MS = 5000;
+  var ROUND_DELAY_MAX_MS = 15000;
+  function nextRoundDelayMs() {
+    return ROUND_DELAY_MIN_MS + Math.floor(Math.random() * (ROUND_DELAY_MAX_MS - ROUND_DELAY_MIN_MS + 1));
+  }
 
-  // Run every city's round, pacing ROUND_DELAY_MS between each one.
+  // Run every city's round, pacing a randomised delay between each one.
   // showRoundResult overwrites the card with each round's own result as it
-  // completes; once the last one is done, append a summary noting every
-  // location that was searched (each has its own Load Board search tab by then).
+  // completes. The searched locations are already visible as the page's own
+  // "New search" tabs, so the card doesn't restate them.
   function runAllRounds(steps, cities) {
     return runAutoRound(steps).then(function () {
       if (roundIdx + 1 >= batches.length) {
-        if (cities.length > 1) announceOtherRounds(cities);
+        // The run is over, but the user keeps browsing: switching between the
+        // per-location search tabs (or paginating) fires a fresh search, which
+        // re-scores. Those searches are no longer tied to the last round, so drop
+        // its driver scoping — otherwise the Plymouth tab would keep being scored
+        // against only Dunfermline's drivers. Back to the whole fleet.
+        roundDriverNames = null;
+        activeRadiusMi = SEARCH_RADIUS_MI;
         return;
       }
       roundIdx++;
       var nextSteps = autopilotSteps(true);
-      nextSteps[2].label = "Waiting " + Math.round(ROUND_DELAY_MS / 1000) + "s before the next search…";
+      var waitMs = nextRoundDelayMs();
+      nextSteps[2].label = "Waiting " + Math.round(waitMs / 1000) + "s before the next search…";
       renderSteps(nextSteps);
-      return delay(ROUND_DELAY_MS).then(function () {
+      return delay(waitMs).then(function () {
         return runAllRounds(nextSteps, cities);
       });
     });
   }
 
-  // Append a note to the (already-shown) final round's result card listing
-  // every location searched, without disturbing the match results / buttons
-  // showRoundResult already rendered and wired up.
-  function announceOtherRounds(cities) {
-    var host = document.getElementById("rlb-card-content");
-    if (!host) return;
-    var html =
-      '<div class="note">Searched ' + cities.length + " driver locations (" +
-      esc(cities.map(function (c) { return c.city; }).join(", ")) +
-      ") — each has its own “New search” tab at the top of the page. Switch tabs to see each one’s matches.</div>";
-    var adv = host.querySelector(".adv");
-    if (adv) adv.insertAdjacentHTML("beforebegin", html);
-    else host.insertAdjacentHTML("beforeend", html);
-  }
-
   function runAutoRound(steps) {
     var cities = batches[roundIdx].map(function (b) { return b.city; });
+    // Scope this round's scoring to its own driver group (null on the main round).
+    // Must be set BEFORE fillBatch: Relay auto-fires a search as the filters change,
+    // so a score can land before fillBatch's promise resolves.
+    var plan = roundPlan[roundIdx] || null;
+    roundDriverNames = (plan && plan.drivers) || null;
+    // Overflow rounds search a tight radius around that group; the main round keeps
+    // the wide net. Set before fillBatch — setRadius reads it as it drives the form.
+    activeRadiusMi = plan && plan.overflow ? OVERFLOW_RADIUS_MI : SEARCH_RADIUS_MI;
     steps[2].state = "active";
     steps[2].label = "Searching loads near " + cities.join(", ") +
+      (plan && plan.overflow ? " (out of range — " + plan.drivers.length + " driver(s))" : "") +
       (batches.length > 1 ? " (" + (roundIdx + 1) + " of " + batches.length + ")" : "");
     steps[3].state = "pending";
     renderSteps(steps);
@@ -1619,6 +1828,38 @@
 
   function countHighlighted() { return document.querySelectorAll("[data-rlb-match]").length; }
 
+  // The origin city/cities the CURRENTLY VISIBLE search tab is using, read from the
+  // live form (Relay swaps the form's contents when you switch search tabs). Used to
+  // relabel the result card after the run, so the card describes the tab on screen
+  // rather than whichever round happened to finish last. Null if unreadable.
+  function currentOriginLabel() {
+    // Read the VALUE element, not the whole box: the box's textContent also
+    // contains the field's own caption ("Origin (5 max)*"), which would end up
+    // in the card. Fall back to the input's value if the value node isn't there.
+    // firstVisible: a hidden earlier round's value node would report that round's
+    // city, which is the stale label this function exists to avoid.
+    var el = firstVisible("#rlb-origin-city-filter-value");
+    var txt = el ? (el.textContent || "") : "";
+    if (!txt.trim()) {
+      var input = originInput();
+      txt = (input && input.value) || "";
+    }
+    txt = txt.replace(/\s+/g, " ").trim();
+    // Strip the field caption if it ever leaks into the text we read — it sits in
+    // front of the first city with no comma between them, so filtering by segment
+    // below would take the city out with it.
+    txt = txt.replace(/^\s*origin\s*\([^)]*\)\s*\*?\s*/i, "").trim();
+    if (!txt) return null;
+    // Selected cities render comma-joined, e.g. "Plymouth, UK" or
+    // "Gateshead, UK, Durham, UK" — drop the country suffixes and any stray
+    // caption text so it reads like the round labels used elsewhere on the card.
+    var parts = txt.split(",").map(function (s) { return s.trim(); })
+      .filter(function (s) {
+        return s && !/^(uk|gb|gbr|united kingdom)$/i.test(s) && !/origin|max/i.test(s);
+      });
+    return parts.length ? parts.join(", ") : null;
+  }
+
   // Keep the result card's number in sync with what's actually highlighted — so
   // paginating (a fresh score for the new page) updates the count and the
   // "Show matches" step-through targets the current page. No-op mid-run.
@@ -1632,6 +1873,15 @@
     if (res && res.classList) res.classList.toggle("zero", n === 0);
     var lbl = document.querySelector("#rlb-card .result .lbl");
     if (lbl) lbl.textContent = n === 1 ? "load matches your drivers" : "loads match your drivers";
+    // The "Location 3 of 3 · Dunfermline" line names the round that produced this
+    // count. Once the run is over the user can switch search tabs, which re-scores
+    // against whatever that tab is showing — so the old round label no longer
+    // describes it. Replace it with the origin the visible tab is actually using.
+    var rnd = document.querySelector("#rlb-card .result .rnd");
+    if (rnd) {
+      var shown = currentOriginLabel();
+      rnd.textContent = shown ? shown : "";
+    }
     // NOTE: do NOT reset matchPos here — this runs on every repaint (incl. the
     // repaint caused by flashing a match), which would keep "Show matches" stuck.
     var step = document.getElementById("rlb-a-step");
@@ -1649,13 +1899,13 @@
     // non-technical message instead of the generic API-failure text below.
     if (lastNotRegistered) {
       return '<div class="note fallback">It looks like you’re not registered with FleetYes yet. ' +
-        "Showing drivers read from Relay trips instead, searched from each driver’s own location.</div>";
+        "Showing drivers read from Relay trips instead.</div>";
     }
     return (
       '<div class="note fallback">⚠ Driver shifts unavailable' +
       (lastApiError ? " (" + esc(lastApiError) + ")" : "") +
-      " — likely no drivers set up for this carrier in FleetYes, or the carrier isn’t registered yet. " +
-      "Showing drivers read from Relay trips instead, searched from each driver’s own location.</div>"
+      " likely no drivers set up for this carrier in FleetYes." +
+      "Showing drivers read from Relay trips instead.</div>"
     );
   }
 
@@ -1825,7 +2075,7 @@
     lastLoads = loads;
     setPanel("rlb-seen", String(loads.length));
     try {
-      chrome.runtime.sendMessage({ type: "score-loads", loads: loads, mode: lastMode }, function (res) {
+      chrome.runtime.sendMessage({ type: "score-loads", loads: loads, mode: lastMode, driverNames: roundDriverNames }, function (res) {
         if (chrome.runtime.lastError || !res || !res.ok) {
           logError("scoreAndPaint", (res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || "score-loads failed");
           resolveScores(null); // unblock the autopilot even on failure
