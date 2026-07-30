@@ -959,7 +959,9 @@
   }
 
   function equipmentBox() {
-    return document.getElementById("equipment-trailer-filter");
+    // firstVisible for the same reason as radiusBox/dateInputs: previous rounds'
+    // search tabs stay mounted, so a plain id lookup can return a hidden one.
+    return firstVisible("#equipment-trailer-filter");
   }
 
   // "New search" leaves Equipment empty (0 selected) and Equipment is required, so
@@ -1061,11 +1063,16 @@
   // fillBatch runs, because Relay re-fires its own search as each filter changes.
   var activeRadiusMi = SEARCH_RADIUS_MI;
 
+  // Relay keeps every previous "New search" tab's DOM mounted, so getElementById
+  // returns the FIRST (often a hidden, earlier round's) radius box — we'd then
+  // open/toggle that stale one while the visible tab's popover stayed open, which
+  // is exactly the stuck dropdown seen on round 2+. Always prefer a visible match,
+  // the same way originInput/findSearchButton already do.
   function radiusBox() {
-    return document.getElementById("rlb-origin-radius-filter");
+    return firstVisible("#rlb-origin-radius-filter");
   }
   function radiusValueEl() {
-    return document.getElementById("rlb-origin-radius-filter-value");
+    return firstVisible("#rlb-origin-radius-filter-value");
   }
   function currentRadius() {
     var el = radiusValueEl();
@@ -1130,10 +1137,13 @@
   // (DD/MM/YYYY) and a time (HH:mm, 24-hour). These are their real DOM ids.
   function dateInputs() {
     return {
-      startDate: document.getElementById("rlb-start-date-filter"),
-      startTime: document.getElementById("rlb-start-time-filter"),
-      endDate: document.getElementById("rlb-end-date-filter"),
-      endTime: document.getElementById("rlb-end-time-filter"),
+      // firstVisible, not getElementById: earlier rounds' search tabs stay mounted,
+      // so a plain id lookup can hand back a hidden previous tab's input — we'd type
+      // the dates into that one and leave the visible tab's calendar open.
+      startDate: firstVisible("#rlb-start-date-filter"),
+      startTime: firstVisible("#rlb-start-time-filter"),
+      endDate: firstVisible("#rlb-end-date-filter"),
+      endTime: firstVisible("#rlb-end-time-filter"),
     };
   }
 
@@ -1220,7 +1230,7 @@
   function countOriginsSelected(cities) {
     var input = originInput();
     var box = (input && (input.closest("#rlb-origin-city-filter") || input.parentElement)) ||
-      document.getElementById("rlb-origin-city-filter");
+      firstVisible("#rlb-origin-city-filter");
     var txt = (((box && box.textContent) || "") + " " + ((input && input.value) || "")).toLowerCase();
     return cities.filter(function (c) { return txt.indexOf(String(c).toLowerCase()) !== -1; }).length;
   }
@@ -1236,7 +1246,7 @@
   function originBoxText() {
     var input = originInput();
     var box = (input && (input.closest("#rlb-origin-city-filter") || input.parentElement)) ||
-      document.getElementById("rlb-origin-city-filter");
+      firstVisible("#rlb-origin-city-filter");
     return ((box && box.textContent) || "").replace(/\s+/g, " ").trim();
   }
   function originListbox(input) {
@@ -1826,7 +1836,9 @@
     // Read the VALUE element, not the whole box: the box's textContent also
     // contains the field's own caption ("Origin (5 max)*"), which would end up
     // in the card. Fall back to the input's value if the value node isn't there.
-    var el = document.getElementById("rlb-origin-city-filter-value");
+    // firstVisible: a hidden earlier round's value node would report that round's
+    // city, which is the stale label this function exists to avoid.
+    var el = firstVisible("#rlb-origin-city-filter-value");
     var txt = el ? (el.textContent || "") : "";
     if (!txt.trim()) {
       var input = originInput();
