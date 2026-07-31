@@ -133,6 +133,39 @@ async function log(job, msg, level) {
 // avoid unbounded storage growth.
 const ERROR_LOG_MAX = 200;
 
+// ── durable scoring diagnostics ──────────────────────────────────────────────
+// Every score-loads call records WHY loads were rejected. Console output is gone
+// the moment DevTools closes, so each round's breakdown is also persisted here —
+// that way a "it found 0 loads" report can be diagnosed after the fact, without
+// having had the console open at the time. Same rotation approach as errorLog.
+const DIAG_LOG_MAX = 100;
+
+async function logDiag(entry) {
+  try {
+    const stored = await chrome.storage.local.get(["diagLog"]);
+    const next = (stored.diagLog || []).concat(entry).slice(-DIAG_LOG_MAX);
+    await chrome.storage.local.set({ diagLog: next });
+  } catch (e) {
+    /* storage unavailable — the console line above still went out */
+  }
+}
+
+// Turn the raw counters into a human-readable "why loads were rejected" summary,
+// e.g. "412 rejected: 300 timing, 90 too far, 22 equipment". Reasons with a zero
+// count are omitted so the line stays readable.
+function describeRejections(diag) {
+  const reasons = [
+    [diag.droppedForTiming, "timing (pickup outside the driver's window)"],
+    [diag.droppedForDistance, "too far (deadhead beyond nearbyRadius)"],
+    [diag.droppedForShort, "trip too short (under minTripMiles)"],
+    [diag.droppedForEquipment, "equipment mismatch"],
+    [diag.droppedForDriveTime, "can't reach pickup in time"],
+  ].filter((r) => r[0] > 0);
+  const total = reasons.reduce((s, r) => s + r[0], 0);
+  if (!total) return "no loads rejected";
+  return total + " rejected: " + reasons.map((r) => r[0] + " " + r[1]).join(", ");
+}
+
 async function logError(source, err, context) {
   const message = err && err.message ? err.message : String(err);
   const stack = err && err.stack ? String(err.stack) : null;
@@ -1763,7 +1796,22 @@ async function scoreLoadsForPage(loads, mode, driverNames) {
   const availability = wanted
     ? fullList.filter((a) => wanted.has(String((a.driver && a.driver.name) || "").toLowerCase().trim()))
     : fullList;
-  if (!availability.length) return { ok: true, drivers: 0, loads: [], availabilityAt: availabilityAt };
+  if (!availability.length) {
+    // No drivers to score against at all — worth recording, because it looks
+    // identical to "no loads matched" from the card but has a different cause
+    // (empty availability, or a driver group whose names matched nobody).
+    const why = wanted
+      ? "driver group matched none of the " + fullList.length + " cached driver(s)"
+      : "no cached driver availability";
+    console.log("[RLB score] 0 drivers to score — " + why);
+    logDiag({
+      ts: Date.now(), mode: mode || "all", scopedToGroup: !!wanted,
+      driverNames: wanted ? Array.from(wanted) : null,
+      loadsSeen: Array.isArray(loads) ? loads.length : 0, matched: 0,
+      driversTotal: 0, rejectionSummary: why,
+    });
+    return { ok: true, drivers: 0, loads: [], availabilityAt: availabilityAt };
+  }
   const response = { workOpportunities: Array.isArray(loads) ? loads : [] };
   const perDriver = [];
   // Aggregate why loads get dropped, so the panel/console can explain "0 matches".
@@ -1795,6 +1843,39 @@ async function scoreLoadsForPage(loads, mode, driverNames) {
     ));
   }
   const topLoads = buildTopLoads(perDriver, 0); // 0 = keep every matched load, not just top N
+
+  // Spell out the rejection reasons rather than leaving the raw counters for the
+  // reader to interpret. loadsSeen is what the board handed us; matched is what
+  // survived for at least one driver.
+  diag.loadsSeen = response.workOpportunities.length;
+  diag.matched = topLoads.length;
+  diag.rejectionSummary = describeRejections(diag);
+  const scope = wanted ? "group of " + availability.length : "all " + availability.length;
+  console.log(
+    "[RLB score] " + diag.loadsSeen + " load(s) seen → " + diag.matched + " matched · " +
+    scope + " driver(s) (" + diag.driversUsable + " usable, " +
+    diag.driversNoLocation + " unplaceable) · " + diag.rejectionSummary
+  );
+  // Fire-and-forget: never make scoring wait on a storage write.
+  logDiag({
+    ts: Date.now(),
+    mode: mode || "all",
+    scopedToGroup: !!wanted,
+    driverNames: wanted ? Array.from(wanted) : null,
+    loadsSeen: diag.loadsSeen,
+    matched: diag.matched,
+    driversTotal: diag.driversTotal,
+    driversUsable: diag.driversUsable,
+    driversNoLocation: diag.driversNoLocation,
+    feasiblePairs: diag.feasiblePairs,
+    droppedForTiming: diag.droppedForTiming,
+    droppedForDistance: diag.droppedForDistance,
+    droppedForShort: diag.droppedForShort,
+    droppedForEquipment: diag.droppedForEquipment,
+    droppedForDriveTime: diag.droppedForDriveTime,
+    rejectionSummary: diag.rejectionSummary,
+  });
+
   return { ok: true, drivers: availability.length, loads: topLoads, diag: diag, availabilityAt: availabilityAt };
 }
 

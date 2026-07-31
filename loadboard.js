@@ -566,12 +566,47 @@
       '<details class="adv"><summary>Advanced / debug ▾</summary><div class="tools">' +
       '<button id="rlb-t-refresh" type="button">Refresh drivers</button>' +
       '<button id="rlb-t-view" type="button">View drivers</button>' +
+      '<button id="rlb-t-diag" type="button">Why not matched?</button>' +
       "</div></details>"
     );
   }
+
+  // Print the persisted scoring diagnostics to the console. The background records
+  // one entry per score (see logDiag), so this works even for a run that happened
+  // before DevTools was opened — which is the whole point of persisting it.
+  function dumpDiagLog() {
+    try {
+      chrome.storage.local.get(["diagLog"], function (r) {
+        var rows = (r && r.diagLog) || [];
+        if (!rows.length) {
+          console.log("[RLB diag] no scoring diagnostics recorded yet.");
+          return;
+        }
+        console.log("[RLB diag] " + rows.length + " scoring run(s) recorded, newest last:");
+        // console.table gives a readable grid; the full objects follow for detail.
+        try {
+          console.table(rows.map(function (d) {
+            return {
+              when: new Date(d.ts).toLocaleString("en-GB"),
+              mode: d.mode,
+              group: d.scopedToGroup ? (d.driverNames || []).length + " driver(s)" : "all",
+              seen: d.loadsSeen,
+              matched: d.matched,
+              usable: d.driversUsable,
+              why: d.rejectionSummary,
+            };
+          }));
+        } catch (e) { /* console.table unavailable — the raw dump below still runs */ }
+        console.log(rows);
+      });
+    } catch (e) { /* context invalidated */ }
+  }
+
   function wireAdvanced() {
     var r = document.getElementById("rlb-t-refresh");
     var v = document.getElementById("rlb-t-view");
+    var d = document.getElementById("rlb-t-diag");
+    if (d) d.addEventListener("click", dumpDiagLog);
     if (r) r.addEventListener("click", function () {
       // Force fresh fetch + re-run whichever flow produced this card.
       if (lastMode === "unassigned") runUnassignedDriversAutopilot();
