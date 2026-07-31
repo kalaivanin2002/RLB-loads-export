@@ -2260,6 +2260,10 @@
   function ensureAutoRefreshOff() {
     var sw = document.querySelector('#utility-bar input[role="switch"]');
     if (sw && sw.getAttribute("aria-checked") === "true") {
+      // Diagnostic only (no behavior change): confirms/refutes the theory that
+      // Relay resets this toggle to "on" for a tab we've already visited —
+      // e.g. right after the user opens an extra "+ New search" tab of their own.
+      console.log("[RLB board] Relay auto-refresh switch was ON — clicking it off. tab:", currentOriginLabel());
       sw.click();
       setPanel("rlb-ar", "auto-refresh off");
     } else if (sw) {
