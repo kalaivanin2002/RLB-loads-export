@@ -2116,7 +2116,13 @@
           resolveScores(null); // unblock the autopilot even on failure
           return;
         }
-        latest = {};
+        // Only clear entries for loads in THIS batch (the ids just re-searched) —
+        // a blanket "latest = {}" here would also erase match info for every OTHER
+        // tab/round already scored. Switching back to an earlier "New search" tab
+        // just re-displays Relay's cached cards with no new network search, so
+        // nothing would ever repopulate it and the card would read 0 until the
+        // user forced a refresh. Loads outside this batch keep their prior info.
+        loads.forEach(function (l) { if (l && l.id) delete latest[l.id]; });
         (res.loads || []).forEach(function (l) { if (l && l.loadId) latest[l.loadId] = l; });
         driverCount = res.drivers || driverCount;
         matchPos = 0; // a fresh score (new page/round) → step-through starts over
